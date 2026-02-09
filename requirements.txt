@@ -1,0 +1,8 @@
+langgraph
+pydantic
+google-generativeai
+requests
+python-dotenv
+yt-dlp
+youtube-transcript-api
+moviepy
