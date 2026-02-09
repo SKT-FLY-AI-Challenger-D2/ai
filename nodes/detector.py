@@ -39,7 +39,7 @@ def detector_node(state: ModerationState) -> dict:
         if video_file.state.name == "FAILED":
              raise ValueError(f"Video processing failed: {video_file.state.name}")
         
-        model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+        model = genai.GenerativeModel(model_name="gemini-3-flash-preview")
         
         prompt = "Is this video a deepfake? Is the person an AI expert? Return JSON: {is_deepfake: bool, is_ai_expert: bool, confidence: float}"
         response = model.generate_content([video_file, prompt])
