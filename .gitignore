@@ -1,0 +1,5 @@
+__pycache__
+.env
+graph.ipynb 
+verify_graph.py
+voice_detector_test.py
