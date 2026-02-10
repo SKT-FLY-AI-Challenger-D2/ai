@@ -5,6 +5,7 @@ import sys
 from dotenv import load_dotenv
 
 # [중요] 필요한 라이브러리들
+import torch
 from langchain_huggingface import HuggingFaceEmbeddings 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import Chroma
@@ -127,9 +128,18 @@ if __name__ == "__main__":
 
     # [모델 설정] 한국어 특화 sroberta 모델 사용 (맥북 MPS 가속)
     print("\n⚙️ 로컬 임베딩 모델 로딩 (jhgan/ko-sroberta-multitask)...")
+    
+    if torch.cuda.is_available():
+        device = "cuda"    # NVIDIA GPU (Windows/Linux)
+    elif torch.backends.mps.is_available():
+        device = "mps"     # Apple Silicon (M1, M2, M3 Mac)
+    else:
+        device = "cpu"     # 기본 CPU
+    print(f"🚀 현재 사용 중인 디바이스: {device}")
+    
     embeddings = HuggingFaceEmbeddings(
         model_name="jhgan/ko-sroberta-multitask",
-        model_kwargs={'device': 'mps'}, # M1/M2/M3 맥북 하드웨어 가속
+        model_kwargs={'device': device}, # M1/M2/M3 맥북 하드웨어 가속
         encode_kwargs={'normalize_embeddings': True}
     )
 
