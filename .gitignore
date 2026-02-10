@@ -2,6 +2,10 @@ __pycache__
 .env
 graph.ipynb 
 verify_graph.py
+voice_detector_test.py
+.venv/
+chroma_db_local/
+downloads/
 test/*
 samples/*
 downloads/*
