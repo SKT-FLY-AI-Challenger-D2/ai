@@ -16,7 +16,7 @@ def legal_node(state: ModerationState) -> dict:
 
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-3-flash-preview")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         
         prompt = f"""
         Analyze the following text for legal issues, specifically fraud, illegal activities, and falsehoods.

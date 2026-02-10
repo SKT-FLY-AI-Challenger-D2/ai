@@ -3,25 +3,53 @@ import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
 
-def download_video(url, output_dir="downloads"):
+import os
+import yt_dlp
+
+def download_video(url, output_dir="downloads", clip_duration=30):
     """
-    Downloads video from YouTube URL to the specified directory.
-    Returns the path to the downloaded video file.
+    If video duration >= clip_duration:
+        download middle clip_duration seconds
+    Else:
+        download full original video
+    Returns path to downloaded video
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-        
+
+    # 1️⃣ 먼저 길이만 가져오기 (다운로드 X)
+    with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+        duration = info.get("duration", 0)
+
+    # 2️⃣ 옵션 분기
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': os.path.join(output_dir, '%(id)s.%(ext)s'),
         'noplaylist': True,
+        'merge_output_format': 'mp4',
+        'quiet': True,
     }
-    
+
+    if duration >= clip_duration:
+        half = clip_duration // 2
+        ydl_opts.update({
+            'download_sections': [
+                f"*{duration/2-half}-{duration/2+half}"
+            ],
+            'force_keyframes_at_cuts': True,
+        })
+        print(f"[INFO] Downloading middle {clip_duration}s (duration={duration}s)")
+    else:
+        print(f"[INFO] Short video ({duration}s). Downloading full video")
+
+    # 3️⃣ 실제 다운로드
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info_dict = ydl.extract_info(url, download=True)
-        video_path = ydl.prepare_filename(info_dict)
-        
+        info = ydl.extract_info(url, download=True)
+        video_path = ydl.prepare_filename(info)
+
     return video_path
+
 
 def extract_audio(video_path, output_dir="downloads"):
     """
@@ -76,7 +104,7 @@ def transcribe_with_gemini(audio_path):
         if audio_file.state.name == "FAILED":
              raise ValueError(f"Audio processing failed: {audio_file.state.name}")
         
-        model = genai.GenerativeModel(model_name="gemini-3-flash-preview")
+        model = genai.GenerativeModel(model_name="gemini-2.5-flash")
         
         prompt = "Generate a verbatim transcript of this audio file. Do not include timestamps or speaker labels unless necessary for clarity. Just return the text."
         response = model.generate_content([audio_file, prompt])
