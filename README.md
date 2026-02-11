@@ -13,11 +13,11 @@
 
 ```mermaid
 graph TD
-    START --> Legal[Legal Node (RAG)]
-    START --> Fact[Fact Check Node]
-    START --> Detector[Detector Node (VLM)]
+    START --> Legal["Legal Node (RAG)"]
+    START --> Fact["Fact Check Node"]
+    START --> Detector["Detector Node (VLM)"]
     
-    Legal --> Reporter[Reporter Node]
+    Legal --> Reporter["Reporter Node"]
     Fact --> Reporter
     Detector --> Reporter
     
