@@ -50,7 +50,7 @@ retriever = vector_db.as_retriever(search_kwargs={"k": 8})
 # 3. LLM 설정 (Gemini 2.0 Flash)
 # 모델명은 사용 가능한 최신 버전(gemini-2.0-flash 등)으로 확인 필요
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.0-flash", 
+    model="gemini-2.5-flash", 
     temperature=0, 
     google_api_key=api_key
 )
@@ -84,18 +84,15 @@ analysis_template = """
     * **허위/과장:** 근거 없는 최상급 표현("최고", "유일") -> **[표시광고법 제3조]**
 
 **[JSON 출력 형식 준수]**
-* `is_illegal`: 명백한 위반 문구가 있을 때만 `true`. 단순 누락이나 확인이 필요한 사항은 `false`로 설정하되 `reason`에 명시.
-* `reason`: 반드시 **"[위반 의심]"** 또는 **"[확인 필요]"** 말머리를 사용하여 작성하십시오.
-    * 형식: **"[태그] (관련 법령) 구체적 사유"**
+* `legal_issue_score`: 법적 리스크 점수 (0.0 ~ 1.0). 위반이 의심될수록 높음.
+* `legal_issue_evidence`: ["판단 근거 1", "판단 근거 2", ...] (가능한 한 구체적인 위반 또는 확인 필요 사항을 문자열 리스트로 작성)
 
 ```json
 {{
-  "is_falsehood": true/false,
-  "is_fraud": true/false, 
-  "is_illegal": true/false,
-  "confidence": 0.00~1.00,
-  "reason": "[확인 필요] (식품표시광고법 제10조) 영상 내에서 자율심의필증이 확인되지 않아 실제 심의 이수 여부에 대한 확인이 필요하며, [위반 의심] (식품위생법 제13조) '더부룩함이 사라진다'는 표현은 일반 식품을 소화제로 오인하게 할 소지가 있음."
+  "legal_issue_score": 0.0,
+  "legal_issue_evidence": ["[확인 필요] (식품표시광고법 제10조) 영상 내에서 자율심의필증 확인 안됨", "[위반 의심] (식품위생법 제13조) 일반 식품을 소화제로 오인 소지"]
 }}
+```
 """
 
 analysis_prompt = ChatPromptTemplate.from_template(analysis_template)
@@ -156,31 +153,46 @@ def legal_node(state: ModerationState) -> ModerationState:
         if json_str_match:
             try:
                 json_data = json.loads(json_str_match.group(1).strip())
+                
+                # Ensure evidence is list
+                evidence = json_data.get("legal_issue_evidence", [])
+                if isinstance(evidence, str):
+                    evidence = [evidence]
+                elif not isinstance(evidence, list):
+                    evidence = []
+                
                 state.legal = LegalResult(
-                    is_falsehood=bool(json_data.get("is_falsehood", False)),
-                    is_fraud=bool(json_data.get("is_fraud", False)),
-                    is_illegal=bool(json_data.get("is_illegal", False)),
-                    confidence=float(json_data.get("confidence", 0.0))
+                    legal_issue_score=float(json_data.get("legal_issue_score", 0.0)),
+                    legal_issue_evidence=evidence
                 )
                 
                 # 판단 근거 출력 시 법조항이 포함된 'reason' 출력
                 print("\n⚖️ [AI 최종 판단 리포트]")
-                print(f"  - 불법 여부: {state.legal.is_illegal}")
-                print(f"  - 신뢰도: {state.legal.confidence}")
-                print(f"  - 핵심 근거: {json_data.get('reason', '분석 결과 참조')}")
+                print(f"  - 법적 리스크 점수: {state.legal.legal_issue_score}")
+                print(f"  - 핵심 근거: {state.legal.legal_issue_evidence}")
                 print("--------------------------\n")
                 
             except Exception as json_e:
                 print(f"⚠️ JSON 데이터 매핑 실패: {json_e}")
                 state.legal = LegalResult(
-                    is_falsehood=False, is_fraud=False, is_illegal=False, confidence=0.0
+                    legal_issue_score=0.0,
+                    legal_issue_evidence=[f"JSON Parsing Error: {json_e}"]
                 )
         else:
             print("⚠️ 보고서 내에서 JSON 지표를 찾지 못했습니다.")
+            # fallback
+            state.legal = LegalResult(
+                legal_issue_score=0.0,
+                legal_issue_evidence=["JSON output not found"]
+            )
 
         state.report = full_report 
 
     except Exception as e:
         print(f"❌ 분석 단계 오류 발생: {e}")
+        state.legal = LegalResult(
+            legal_issue_score=0.0,
+            legal_issue_evidence=[f"Analysis Error: {e}"]
+        )
 
-    return state
+    return {"legal": state.legal}

@@ -2,25 +2,29 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
 import os
+from typing import Optional
 from dotenv import load_dotenv
 
 # Import usage functions
 from youtube_utils import download_video, extract_audio, get_transcript
 # Import graph
 from graph import app as graph_app
+from schemas import FactResult, DeepfakeResult, LegalResult
 
 # Load environment variables
 load_dotenv()
 
-app = FastAPI(title="AI Moderation API", version="1.0")
+app = FastAPI(title="AI Moderation API", version="2.0")
 
 class AnalyzeRequest(BaseModel):
     youtube_url: str
 
 class AnalyzeResponse(BaseModel):
-    legal_issue: bool
-    deepfake_issue: bool
-    ai_voice_issue: bool
+    legal: Optional[LegalResult]
+    deepfake: Optional[DeepfakeResult]
+    fact: Optional[FactResult]
+    final_score: float
+    report: str
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_video(request: AnalyzeRequest):
@@ -29,10 +33,6 @@ async def analyze_video(request: AnalyzeRequest):
     
     try:
         # 1. Download & Process Video
-        # Note: These are synchronous operations. In a production server, 
-        # these should be offloaded to background tasks or run in a thread pool.
-        # For this prototype, we'll run them directly.
-        
         print("Downloading video...")
         video_path = download_video(url)
         
@@ -50,26 +50,15 @@ async def analyze_video(request: AnalyzeRequest):
         
         # 2. Run Graph
         print("Running analysis graph...")
-        # invoke is synchronous. 
         result_state = graph_app.invoke(inputs)
         
         # 3. Parse Results
-        legal = result_state.get("legal")
-        deepfake = result_state.get("deepfake")
-        voice = result_state.get("voice")
-        report_text = result_state.get("report", "")
-        
-        # Legal Logic: Any of illegal, fraud, falsehood
-        legal_issue = False
-        if legal:
-            legal_issue = legal.is_illegal or legal.is_fraud or legal.is_falsehood
-        
-        # 법적으로 통합하여 하나로, deepfake&ai전문가도 하나로, ai_voice는 따로 
-
         return AnalyzeResponse(
-            legal_issue=legal_issue,
-            deepfake_issue=deepfake.is_deepfake or deepfake.is_ai_expert,
-            ai_voice_issue=voice.is_ai_voice
+            legal=result_state.get("legal"),
+            deepfake=result_state.get("deepfake"),
+            fact=result_state.get("fact"),
+            final_score=result_state.get("final_score", 0.0),
+            report=result_state.get("report", "")
         )
         
     except Exception as e:
