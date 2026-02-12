@@ -85,6 +85,7 @@ analysis_template = """
 
 **[JSON 출력 형식 준수]**
 'legal_issue_score'에는 법적 문제가 있을 확률, 'legal_issue_evidence'에는 법적 문제가 있다는 근거들을 작성해주세요.
+의심 정도가 낮고 근거가 부족한 경우에는 evidence를 채우지 않아도 괜찮습니다.
 * `legal_issue_score`: 법적 리스크 점수 (0.0 ~ 1.0). 위반이 의심될수록 높음.
 * `legal_issue_evidence`: ["판단 근거 1", "판단 근거 2", ...] (가능한 한 구체적인 위반 또는 확인 필요 사항을 작성)
 

@@ -45,6 +45,7 @@ def detector_node(state: ModerationState) -> dict:
         반드시 JSON 구조로만 반환하세요
         'deepfake_ai_score'에는 딥페이크 혹은 AI로 생성된 전문가 의심 정도, 
         'deepfake_ai_evidence'에는 의심되는 근거들을 나열하세요.
+        의심 정도가 낮고 근거가 부족한 경우에는 evidence를 채우지 않아도 괜찮습니다.
         :
         {
             "deepfake_ai_score": 0.0 ~ 1.0,

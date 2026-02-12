@@ -30,6 +30,7 @@ def fact_check_node(state: ModerationState) -> dict:
         당신은 팩트 체크 전문가입니다. 다음 텍스트의 사실 여부를 판단해주세요.
         출력 형식은 반드시 JSON이어야 합니다
         "fake_score"에는 거짓일 확률, "fake_evidence"에는 거짓이라고 의심되는 근거들을 작성해주세요.
+        의심 정도가 낮고 근거가 부족한 경우에는 evidence를 채우지 않아도 괜찮습니다.
         :
         {{
             "fake_score": 0.0 ~ 1.0 (1.0에 가까울수록 거짓 정보일 확률 높음),
