@@ -42,7 +42,10 @@ def detector_node(state: ModerationState) -> dict:
         
         prompt = """
         이 영상이 딥페이크인지, 인물은 AI 전문가인지 판단해주세요.
-        반드시 JSON 구조로만 반환하세요:
+        반드시 JSON 구조로만 반환하세요
+        'deepfake_ai_score'에는 딥페이크 혹은 AI로 생성된 전문가 의심 정도, 
+        'deepfake_ai_evidence'에는 의심되는 근거들을 나열하세요.
+        :
         {
             "deepfake_ai_score": 0.0 ~ 1.0,
             "deepfake_ai_evidence": ["근거 1", "근거 2", ...]
