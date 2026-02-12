@@ -36,10 +36,10 @@ embeddings = GoogleGenerativeAIEmbeddings(
      google_api_key=api_key 
 )
 
-# [수정 포인트] Docker ChromaDB 서버 설정
-CHROMA_HOST = "localhost"
-CHROMA_PORT = 8002
-COLLECTION_NAME = "legal_documents"
+# Docker ChromaDB 서버 설정
+CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
+CHROMA_PORT = int(os.getenv("CHROMA_PORT", 8002))  # 포트는 숫자로 변환 필요
+COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "legal_documents")
 
 try:
     # 2. Docker 서버 연결을 위한 HttpClient 생성

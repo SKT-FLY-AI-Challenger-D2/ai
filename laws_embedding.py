@@ -17,9 +17,10 @@ load_dotenv()
 
 LAW_FOLDER_PATH = "./laws"
 # Docker 서버 설정 (8000번 포트)
-CHROMA_HOST = "localhost"
-CHROMA_PORT = 8002
-COLLECTION_NAME = "legal_documents"
+# 기존 하드코딩된 부분을 아래와 같이 변경
+CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
+CHROMA_PORT = int(os.getenv("CHROMA_PORT", 8002))
+COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "legal_documents")
 
 class RateLimitedGeminiEmbeddings(GoogleGenerativeAIEmbeddings):
     def embed_documents(self, texts):
