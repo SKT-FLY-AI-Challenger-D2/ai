@@ -2,10 +2,11 @@ import os
 import re
 import glob
 import sys
+import time
+import chromadb
 from dotenv import load_dotenv
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
@@ -15,19 +16,18 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 load_dotenv()
 
 LAW_FOLDER_PATH = "./laws"
-DB_PATH = "./chroma_db_local"
-
-import time
-
+# Docker 서버 설정 (8000번 포트)
+CHROMA_HOST = "localhost"
+CHROMA_PORT = 8002
+COLLECTION_NAME = "legal_documents"
 
 class RateLimitedGeminiEmbeddings(GoogleGenerativeAIEmbeddings):
     def embed_documents(self, texts):
         embeddings = []
         for t in texts:
             embeddings.append(self.embed_query(t))
-            time.sleep(0.15)  # 분당 ~400 → 안전하게 100 이하
+            time.sleep(0.15)  # RPM 제한 준수
         return embeddings
-
 
 def clean_text(text):
     text = re.sub(r'안민국', '', text)
@@ -62,44 +62,36 @@ def process_pdf(file_path):
         print("👉 [법률 모드]")
         parts = re.split(r'(제\s?\d+\s?조\s?\([^)]+\))', full_text)
         splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
-
         for i in range(1, len(parts), 2):
             header = parts[i]
             content = parts[i + 1]
             chunks = splitter.split_text(content)
-
             for chunk in chunks:
                 docs.append(Document(
                     page_content=f"[{source_name} {header}]\n{chunk}",
                     metadata={"source": source_name, "type": "law"}
                 ))
-
     elif is_precedent:
         print("👉 [판례 모드]")
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=300,
+            chunk_size=1000, chunk_overlap=300,
             separators=["\n\n", "살피건대", "이에 대하여", "."]
         )
         chunks = splitter.split_text(full_text)
-
         for i, chunk in enumerate(chunks):
             docs.append(Document(
                 page_content=f"[{source_name} 판결문 {i+1}]\n{chunk}",
                 metadata={"source": source_name, "type": "precedent"}
             ))
-
     else:
         print("👉 [일반 문서 모드]")
         splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
         chunks = splitter.split_text(full_text)
-
         for chunk in chunks:
             docs.append(Document(
                 page_content=f"[{source_name} 문서]\n{chunk}",
                 metadata={"source": source_name, "type": "general"}
             ))
-
     return docs
 
 if __name__ == "__main__":
@@ -119,21 +111,26 @@ if __name__ == "__main__":
 
     print(f"\n📦 총 {len(all_documents)}개 문서 조각")
 
-    if not all_documents:
-        print("❌ 생성된 문서 조각이 없습니다. PDF 로드 실패 원인을 확인하세요.")
-        sys.exit(1)
-
     print("⚙️ Gemini Embedding 로딩...")
     embeddings = RateLimitedGeminiEmbeddings(
         model="models/gemini-embedding-001",
         google_api_key=api_key
     )
 
-    print("🚀 Chroma DB 생성 중...")
-    Chroma.from_documents(
-        documents=all_documents,
-        embedding=embeddings,
-        persist_directory=DB_PATH
-    )
-
-    print("🎉 완료")
+    print(f"🚀 Docker Chroma DB 서버({CHROMA_HOST}:{CHROMA_PORT})에 연결 및 저장 중...")
+    
+    try:
+        # 8000번 포트로 떠 있는 Docker 서버에 접속하는 클라이언트 생성
+        http_client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
+        
+        # client= 파라미터로 명시적으로 전달하여 AttributeError 방지
+        vector_db = Chroma.from_documents(
+            documents=all_documents,
+            embedding=embeddings,
+            collection_name=COLLECTION_NAME,
+            client=http_client
+        )
+        print("🎉 Docker 서버 저장 완료 (Port: 8000)")
+        
+    except Exception as e:
+        print(f"❌ DB 저장 중 오류 발생: {e}")
