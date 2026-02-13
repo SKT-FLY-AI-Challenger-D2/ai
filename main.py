@@ -2,7 +2,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
 import os
-from typing import Optional
+import cv2
+import random
+from typing import Optional, List
 from dotenv import load_dotenv
 
 # Import usage functions
@@ -26,6 +28,49 @@ class AnalyzeResponse(BaseModel):
     final_score: float
     report: str
 
+def extract_random_frames(video_path: str, num_frames: int = 4) -> List[str]:
+    """
+    Extracts num_frames random frames from the video and saves them to downloads/frames/.
+    """
+    print(f"Extracting {num_frames} random frames from {video_path}...")
+    
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"Error opening video file: {video_path}")
+        return []
+
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total_frames <= 0:
+        print("Total frames is 0 or less.")
+        cap.release()
+        return []
+
+    # Create frames directory
+    frames_dir = os.path.join("downloads", "frames")
+    os.makedirs(frames_dir, exist_ok=True)
+    
+    # Pick random indices
+    frame_indices = random.sample(range(total_frames), min(num_frames, total_frames))
+    frame_indices.sort()
+    
+    extracted_paths = []
+    
+    for i, idx in enumerate(frame_indices):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ret, frame = cap.read()
+        if ret:
+            video_basename = os.path.basename(video_path).split('.')[0]
+            frame_name = f"frame_{video_basename}_{i}.jpg"
+            frame_path = os.path.join(frames_dir, frame_name)
+            cv2.imwrite(frame_path, frame)
+            extracted_paths.append(frame_path)
+            print(f"Extracted frame {i+1} at index {idx} to {frame_path}")
+        else:
+            print(f"Failed to extract frame at index {idx}")
+
+    cap.release()
+    return extracted_paths
+
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_video(request: AnalyzeRequest):
     url = request.youtube_url
@@ -42,10 +87,14 @@ async def analyze_video(request: AnalyzeRequest):
         print("Fetching transcript...")
         input_text = get_transcript(url, audio_path=audio_path)
         
+        print("Extracting random frames...")
+        frame_paths = extract_random_frames(video_path, num_frames=4)
+        
         inputs = {
             "input_text": input_text,
             "video_path": video_path,
-            "audio_path": audio_path
+            "audio_path": audio_path,
+            "frame_paths": frame_paths
         }
         
         # 2. Run Graph

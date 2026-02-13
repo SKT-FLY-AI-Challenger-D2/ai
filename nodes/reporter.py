@@ -17,7 +17,7 @@ def reporter_node(state: ModerationState) -> dict:
         deepfake.deepfake_ai_score if deepfake else 0.0,
         fact.fake_score if fact else 0.0
     ]
-    final_score = max(scores) if scores else 0.0
+    final_score = sum(scores) / len(scores) if scores else 0.0
     
     report = f"""
 # Moderation Analysis Report

@@ -13,3 +13,4 @@ chromadb
 fastapi
 uvicorn
 langchain-chroma
+opencv-python

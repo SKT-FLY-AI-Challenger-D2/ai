@@ -18,6 +18,7 @@ class ModerationState(BaseModel):
     input_text: str = ""
     video_path: str = ""
     audio_path: str = "" # Optional audio path for voice detection
+    frame_paths: List[str] = [] # List of paths to extracted frames
     fact: Optional[FactResult] = None 
     deepfake: Optional[DeepfakeResult] = None
     legal: Optional[LegalResult] = None
