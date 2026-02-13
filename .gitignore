@@ -9,4 +9,6 @@ downloads/
 test/*
 samples/*
 downloads/*
-
+data/
+docker-compose.yml
+test_reporter.py

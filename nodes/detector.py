@@ -2,7 +2,10 @@ import os
 import json
 import base64
 import requests
+import re
 from schemas import ModerationState, DeepfakeResult
+
+# 현재 모델은 json 출력이 정상적으로 안되는 듯함 
 
 def detector_node(state: ModerationState) -> dict:
     """
@@ -16,8 +19,7 @@ def detector_node(state: ModerationState) -> dict:
         return {"deepfake": DeepfakeResult(deepfake_ai_score=0.0, deepfake_ai_evidence=["No frames provided for analysis."])}
 
     URL = "https://n9l19dq722i265-8000.proxy.runpod.net/inference"
-    all_evidence = []
-    fake_evidence_list = []
+    manipulation_evidence = []
     total_score = 0.0
     processed_frames = 0
 
@@ -32,13 +34,20 @@ def detector_node(state: ModerationState) -> dict:
 
             data = {
                 "prompt": """<image>
-You are an expert in AI-generated content analysis. Follow these steps:
-• Extract Common Ground: Identify overlapping details (e.g., shadows, outlines, object alignment) across all three responses.
-• Filter Minority Claims: Discard observations mentioned by only one model unless they are critical (e.g.,glaring artifacts).
-• Structure Hierarchically: Group explanations by category (e.g., lighting, geometry, textures) for clarity.
-• Maintain Original Format: Begin with “This is a [real/fake] image.” followed by a concise, semicolon-separated list of consolidated evidence.
-• Avoid Redundancy: Rephrase overlapping points to eliminate repetition while preserving technical accuracy.
-• Ensure Logical Consistency: If any response contains nonsensical, contradictory, or infinite loop reasoning, disregard that portion of the answer.
+당신은 딥페이크 및 AI 생성 콘텐츠 분석 전문가입니다. 제공된 이미지를 분석하여 딥페이크나 AI 생성 여부를 판별해주세요.
+응답은 반드시 아래의 JSON 형식으로만 작성해야 합니다:
+
+{
+  "deepfake_ai_score": 0.0 ~ 1.0 (1.0에 가까울수록 기술적 조작이나 AI 생성 확률이 높음),
+  "deepfake_ai_evidence": ["근거 1", "근거 2", ...] (조작의 증거가 되는 시각적 결함이나 특이사항을 짧게 나열)
+}
+
+분석 시 다음 사항을 중점적으로 확인하세요:
+1. 피부 질감의 부자연스러움
+2. 눈, 코, 입 주변의 뭉개짐이나 어색한 연결
+3. 배경과의 경계선 왜곡
+4. 조명 및 그림자의 불일치
+
 ASSISTANT:""",
                 "image_base64": img_b64
             }
@@ -47,7 +56,7 @@ ASSISTANT:""",
             if response.status_code == 200:
                 full_result = response.json().get("result", "")
                 
-                # Split by ASSISTANT: to get only the response part
+                # Extract response text after Assistant tag
                 if "ASSISTANT:" in full_result:
                     result_text = full_result.split("ASSISTANT:")[-1].strip()
                 elif "assistant:" in full_result:
@@ -55,25 +64,45 @@ ASSISTANT:""",
                 else:
                     result_text = full_result.strip()
 
-                lower_text = result_text.lower()
-                print(f"Frame {i+1} result: {lower_text}")
-                
-                processed_frames += 1
-                
-                if "real" in lower_text:
-                    frame_score = 0.0
-                    all_evidence.append(f"Frame {i+1} judged as REAL.")
-                elif "fake" in lower_text:
-                    frame_score = 1.0
-                    evidence_text = f"Frame {i+1} judged as FAKE: {result_text}"
-                    fake_evidence_list.append(evidence_text)
-                    all_evidence.append(evidence_text)
-                else:
-                    print(f"Ambiguous result for frame {i+1}: {result_text}")
-                    frame_score = 0.5
-                    all_evidence.append(f"Frame {i+1} was inconclusive: {result_text}")
+                print(f"Frame {i+1} raw response: {result_text}")
 
-                total_score += frame_score
+                # JSON Parsing
+                try:
+                    # Clean the result text: some LLMs escape underscores (e.g., \_)
+                    json_str = result_text.replace("\\_", "_")
+                    
+                    if "```json" in json_str:
+                        json_str = json_str.split("```json")[1].split("```")[0].strip()
+                    elif "{" in json_str:
+                        json_str = "{" + json_str.split("{", 1)[1].rsplit("}", 1)[0] + "}"
+                    
+                    data_resp = json.loads(json_str)
+                    
+                    frame_score = float(data_resp.get("deepfake_ai_score", 0.0))
+                    frame_evidence = data_resp.get("deepfake_ai_evidence", [])
+                    
+                    if not isinstance(frame_evidence, list):
+                        frame_evidence = [str(frame_evidence)]
+                    
+                    total_score += frame_score
+                    processed_frames += 1
+
+                    # Only collect evidence if manipulation is suspected for this frame
+                    if frame_score > 0.5:
+                        for ev in frame_evidence:
+                            # Clean up common prefixes like "근거 1:", "Frame 1:" etc. if desired
+                            clean_ev = re.sub(r'^(근거\s*\d+:|Frame\s*\d+:)\s*', '', ev).strip()
+                            if clean_ev:
+                                manipulation_evidence.append(clean_ev)
+                    
+                except Exception as json_e:
+                    print(f"JSON parsing error for frame {i+1}: {json_e}")
+                    # Fallback if JSON parsing fails but text mentions real/fake
+                    lower_text = result_text.lower()
+                    if "fake" in lower_text or "ai 생성" in lower_text or "조작" in lower_text:
+                        total_score += 0.8
+                        manipulation_evidence.append(f"기술적 부자연스러움 및 조작 흔적이 발견되었습니다.")
+                        processed_frames += 1
             else:
                 print(f"Error calling RunPod API for frame {i+1}: {response.status_code}")
 
@@ -85,15 +114,21 @@ ASSISTANT:""",
     else:
         avg_score = 0.0
 
-    # Logic: if score >= 0.5, take evidence from one of the fake frames
-    if avg_score >= 0.5 and fake_evidence_list:
-        final_evidence = [fake_evidence_list[0]]
-    else:
-        final_evidence = ["딥페이크, 혹은 AI 생성되었다고 보기 힘든 영상입니다."]
+    # Aggregate evidence: Pick only several key evidences from manipulated frames
+    final_evidence = []
+    if manipulation_evidence:
+        # Deduplicate and take top unique ones
+        seen = set()
+        for ev in manipulation_evidence:
+            if ev not in seen:
+                final_evidence.append(ev)
+                seen.add(ev)
+        final_evidence = final_evidence[:4] # Limit to 4 key points
 
     result = DeepfakeResult(
         deepfake_ai_score=avg_score,
         deepfake_ai_evidence=final_evidence
     )
 
+    print(f"Final Detection Score: {avg_score:.2f}")
     return {"deepfake": result}

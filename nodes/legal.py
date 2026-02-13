@@ -81,9 +81,21 @@ analysis_template = """
 {script}
 
 **⚖️ 심사 및 판정 가이드라인 (Prudent Review):**
-(이하 가이드라인 및 JSON 형식 지침 동일)
-...
+
+**[JSON 출력 형식 준수]**
+'legal_issue_score'에는 법적 문제가 있을 확률, 'legal_issue_evidence'에는 법적 문제가 있다는 근거들을 작성해주세요.
+의심 정도가 낮고 근거가 부족한 경우에는 evidence를 채우지 않아도 괜찮습니다.
+* `legal_issue_score`: 법적 리스크 점수 (0.0 ~ 1.0). 위반이 의심될수록 높음.
+* `legal_issue_evidence`: ["판단 근거 1", "판단 근거 2", ...] (근거는 법률 규정 근거를 바탕으로 짧게 나열하세요.)
+
+```json
+{{
+  "legal_issue_score": 0.0,
+  "legal_issue_evidence": ["(식품표시광고법 제10조) 영상 내에서 자율심의필증 확인 안됨", "(식품위생법 제13조) 일반 식품을 소화제로 오인 소지"]
+}}
+```
 """
+
 
 analysis_prompt = ChatPromptTemplate.from_template(analysis_template)
 final_chain = analysis_prompt | llm | StrOutputParser()
