@@ -22,6 +22,7 @@ class AnalyzeRequest(BaseModel):
     youtube_url: str
 
 class AnalyzeResponse(BaseModel):
+    is_ad: bool
     legal: Optional[LegalResult]
     deepfake: Optional[DeepfakeResult]
     fact: Optional[FactResult]
@@ -103,6 +104,7 @@ async def analyze_video(request: AnalyzeRequest):
         
         # 3. Parse Results
         return AnalyzeResponse(
+            is_ad=result_state.get("is_ad", False),
             legal=result_state.get("legal"),
             deepfake=result_state.get("deepfake"),
             fact=result_state.get("fact"),

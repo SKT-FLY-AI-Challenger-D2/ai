@@ -10,5 +10,5 @@ test/*
 samples/*
 downloads/*
 data/
-docker-compose.yml
 test_reporter.py
+test_ad_graph.py 

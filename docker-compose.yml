@@ -13,7 +13,7 @@ services:
       - ./data/mysql:/var/lib/mysql
 
   chromadb:
-    image: chromadb/chroma:0.4.20
+    image: chromadb/chroma:0.5.20
     restart: always
     ports:
       - "8002:8000" # 백엔드와 겹치지 않게 8002로 설정
