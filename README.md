@@ -1,9 +1,9 @@
-## Multi-Agent 기반 AI Moderation 시스템
+## Multi-Agent 기반 AI 판별 시스템
 
 본 시스템은 유튜브 영상 및 스크립트를 분석하여 다음과 같은 위법 및 부적절한 콘텐츠를 자동으로 선별합니다.
 
 - **법률 기반 분석**: 표시광고법, 식품위생법 등 법적 규정 위반 여부 (RAG 기반)
-- **딥페이크 & AI 탐지**: Gemini VLM을 활용한 페이스 스와프 및 AI 생성 전문가 탐지
+- **딥페이크 & AI 탐지**: 자체 모델/Gemini VLM을 활용한 페이스 스와프 및 AI 생성 전문가 탐지
 - **팩트 체크**: 영상 내 주장의 사실 관계 확인
 
 # System Architecture
@@ -13,9 +13,11 @@
 
 ```mermaid
 graph TD
-    START --> Legal["Legal Node (RAG)"]
-    START --> Fact["Fact Check Node"]
-    START --> Detector["Detector Node (VLM)"]
+    START --> AdCheck["Ad Check Node"]
+    AdCheck -- "is_ad=True" --> Legal["Legal Node"]
+    AdCheck -- "is_ad=True" --> Fact["Fact Check Node"]
+    AdCheck -- "is_ad=True" --> Detector["VLM Detector Node"]
+    AdCheck -- "is_ad=False" --> END
     
     Legal --> Reporter["Reporter Node"]
     Fact --> Reporter
@@ -41,13 +43,19 @@ graph TD
 pip install -r requirements.txt
 ```
 
-## 3. Generate Vector Database
-분석 전 `laws/` 디렉토리의 법률 문서를 기반으로 벡터 DB를 구축해야 합니다.
+## 3. Databases (Docker)
+본 시스템은 도커를 통해 MySQL과 ChromaDB를 실행합니다.
+```bash
+docker compose up -d
+```
+
+## 4. Generate Vector Database
+분석 전 `laws/` 디렉토리의 법률 문서를 기반으로 벡터 DB를 구축해야 합니다. (ChromaDB가 실행 중이어야 합니다.)
 ```bash
 python laws_embedding.py
 ```
 
-## 4. Run the Server
+## 5. Run the Server
 FastAPI 서버 실행:
 ```bash
 python main.py
@@ -57,7 +65,7 @@ python main.py
 python -m uvicorn main:app --reload
 ```
 
-## 5. API Usage
+## 6. API Usage
 **Endpoint:** `POST /analyze`
 
 **Request Body:**
@@ -83,6 +91,6 @@ python -m uvicorn main:app --reload
     "fake_evidence": ["근거 없는 음모론 제기"]
   },
   "final_score": 0.9,
-  "report": "... (Markdown 형식의 종합 리포트)"
+  "report": "... (종합 리포트)"
 }
 ```

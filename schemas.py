@@ -22,6 +22,7 @@ class ModerationState(BaseModel):
     fact: Optional[FactResult] = None 
     deepfake: Optional[DeepfakeResult] = None
     legal: Optional[LegalResult] = None
+    is_ad: bool = False
     final_score: float = None 
     report: str = "" 
 
