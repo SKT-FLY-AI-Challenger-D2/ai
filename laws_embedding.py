@@ -11,6 +11,7 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from chromadb.config import Settings
 
 # 환경 변수 로드
 load_dotenv()
@@ -123,6 +124,11 @@ if __name__ == "__main__":
     try:
         # 8000번 포트로 떠 있는 Docker 서버에 접속하는 클라이언트 생성
         http_client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
+        # http_client = chromadb.HttpClient(
+        #     host=CHROMA_HOST, 
+        #     port=CHROMA_PORT,
+        #     settings=Settings(allow_reset=True, anonymized_telemetry=False)
+        # )
         
         # client= 파라미터로 명시적으로 전달하여 AttributeError 방지
         vector_db = Chroma.from_documents(
