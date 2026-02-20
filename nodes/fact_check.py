@@ -389,9 +389,51 @@ async def scrape_evidence_task(state: ModerationState) -> ModerationState:
 def scrape_evidence(state: ModerationState) -> ModerationState:
     return asyncio.run(scrape_evidence_task(state))
 
+
 # ==========================================
-# 4. 검증 노드 (Verification Node - Placeholder)
+# 4. 검증 노드 (Verification Node)
 # ==========================================
+
+def get_source_authority_score(url: str) -> int:
+    """
+    URL을 기반으로 공신력 점수를 반환합니다. 점수가 낮을수록 공신력이 높습니다.
+    1점: 정부/공공기관 (.go.kr, .or.kr 등)
+    2점: 논문/학술 (.ac.kr, scholar.google 등)
+    3점: 뉴스/언론 (yna.co.kr, 주요 언론사)
+    4점: 일반 웹사이트
+    5점: SNS/블로그 (youtube, facebook, post.naver 등)
+    """
+    domain = url.lower()
+    
+    # Priority 1: Government/Public
+    if any(x in domain for x in [".go.kr", ".or.kr", "who.int", "un.org", "korea.kr"]):
+        return 1
+        
+    # Priority 2: Academic
+    if any(x in domain for x in [".ac.kr", "scholar.google", "riss.kr", "dbpia.co.kr", "ier.snu.ac.kr"]):
+        return 2
+        
+    # Priority 3: News (Major domains)
+    news_domains = [
+        "yna.co.kr", "chosun.com", "joongang.co.kr", "donga.com", "hani.co.kr", 
+        "khan.co.kr", "kmib.co.kr", "mk.co.kr", "hankyung.com", "imbc.com", 
+        "kbs.co.kr", "sbs.co.kr", "ytn.co.kr", "newsis.com", "news1.kr"
+    ]
+    if any(x in domain for x in news_domains) or "news" in domain:
+        return 3
+        
+    # Priority 5: SNS/Blogs (Explicit low priority)
+    sns_domains = [
+        "youtube.com", "youtu.be", "facebook.com", "instagram.com", "twitter.com", 
+        "tiktok.com", "blog.naver.com", "tistory.com", "brunch.co.kr", "dcinside.com", 
+        "fmkorea.com", "ppomppu.co.kr", "theqoo.net"
+    ]
+    if any(x in domain for x in sns_domains):
+        return 5
+        
+    # Priority 4: General Web (Default)
+    return 4
+
 def verify_facts(state: ModerationState) -> ModerationState:
     """
     수집된 full_text 증거를 각 명제에 매핑하여 진위 여부를 최종 판정합니다.
@@ -409,7 +451,7 @@ def verify_facts(state: ModerationState) -> ModerationState:
     claims_json = state.fact.fake_evidence[1:]
     
     verified_claims = []
-    total_fake_or_exaggerated_count = 0
+    total_risk_score = 0.0
 
     # 2. 명제별 순회 및 판정
     for claim_str in claims_json:
@@ -430,13 +472,14 @@ def verify_facts(state: ModerationState) -> ModerationState:
             
             evidence_context += f"\n---\n[출처: {source_title}]\n[URL: {source_url}]\n[본문]: {body[:3000]}\n"
 
-        # LLM 판정 프롬프트 (정의된 4개 카테고리 준수)
+        # LLM 판정 프롬프트 (0.0~1.0 연속 점수제 적용 + 0.0/1.0 제외 및 1문장 제한)
         verification_prompt = f"""
 ## Role
-너는 수집된 웹 본문 자료를 바탕으로 광고의 진위 여부를 판단하는 전문 팩트체커다.
+너는 수집된 웹 본문 자료를 바탕으로 광고의 진위 여부를 분석하는 전문 팩트체커다.
 
 ## Task
-제공된 [근거 자료]를 바탕으로 [대상 명제]의 진위 여부를 판정하라.
+제공된 [근거 자료]를 바탕으로 [대상 명제]의 위험도(Risk Score)를 판정하라.
+**절대로 0.0점(완벽한 진실)이나 1.0점(완벽한 허위)은 부여하지 말라.** 현실 세계에서 100% 확신은 불가능하기 때문이다.
 
 [대상 명제]
 {claim_text}
@@ -444,17 +487,27 @@ def verify_facts(state: ModerationState) -> ModerationState:
 [근거 자료]
 {evidence_context}
 
-## 판정 기준 (Verdicts)
-- **TRUE (사실)**: 신뢰할 수 있는 출처에서 명제와 일치하는 내용을 확인한 경우.
-- **FALSE (허위)**: 공신력 있는 기관에서 해당 내용을 명시적으로 부정하거나 적발한 경우.
-- **EXAGGERATED (과장)**: 일부 사실이나 방향성은 맞으나, 수치나 효능이 비상식적으로 부풀려진 경우.
-- **UNKNOWN (판단불가)**: 근거 자료에 관련 내용이 없거나 정보가 너무 부족하여 확신할 수 없는 경우.
+## 판정 가이드라인 (Risk Score: 0.0 ~ 1.0)
+- **0.0 ~ 0.2 (매우 낮음)**: 신뢰할 수 있는 공식 근거가 명확하며, 사실로 판단됨.
+- **0.3 ~ 0.5 (주의)**: 일부 근거는 있으나 과장된 표현이 섞여 있거나, 근거가 불충분함.
+- **0.6 ~ 0.8 (의심)**: 신뢰할 수 있는 반박 자료가 존재하거나, 전형적인 과대광고 패턴을 보임.
+- **0.9 ~ 1.0 (매우 높음)**: 공식 기관에 의해 허위/사기로 적발되었거나, 명백한 거짓 정보임.
+- 단, 0.0과 1.0은 절대로 부여하지 말 것
+
+## Output Requirements (Very Important!)
+1. **reason (분석 내용)**: 
+   - 판정 이유를 객관적인 뉘앙스로 설명하되, **반드시 '~니다.'로 끝나는 정중한 문장**으로 작성하라.
+   - 예시: "해당 명제는 의학적 근거가 부족하며, 관련 기관에서도 주의를 당부한 바 있습니다."
+2. **source_name (출처명)**:
+   - 근거 자료에서 확인된 경우, 가능한 한 **"기관명 - 제목 | 사이트명"** 형식으로 추출하라.
+   - 예시: "식품의약품안전처 - 레몬물 효능 팩트체크 | 올바른 건강 정보", "질병관리청 - 음주 가이드라인 | 국가건강정보포털"
 
 ## Output Format (Strict JSON)
 {{
-  "verdict": "TRUE/FALSE/EXAGGERATED/UNKNOWN",
-  "reason": "판정 이유를 논리적으로 설명 (1~2문장)",
-  "evidence_quote": "본문에서 근거가 된 핵심 문구 직접 인용",
+  "risk_score": 0.01~0.99 사이의 실수,
+  "reason": "분석 내용 (반드시 '~니다.'로 종료)",
+  "source_name": "출처명 (기관명 - 제목 | 사이트명)",
+  "evidence_quote": "본문에서 근거가 된 핵심 문구 직접 인용 (없으면 빈 문자열)",
   "evidence_url": "해당 근거가 포함된 원본 URL"
 }}
 """
@@ -468,44 +521,47 @@ def verify_facts(state: ModerationState) -> ModerationState:
             
             result = json.loads(response.text)
             
+            # 1. raw_score 추출 및 보정 (0.01~0.99 범위 강제 클리핑)
+            raw_score = float(result.get("risk_score", 0.5))
+            risk_score = max(0.01, min(0.99, raw_score))
+            
             # 결과 병합
             claim.update({
-                "verdict": result.get("verdict"),
+                "risk_score": risk_score,
                 "reason": result.get("reason"),
+                "source_name": result.get("source_name", "확인된 출처"),
                 "evidence_quote": result.get("evidence_quote"),
                 "evidence_url": result.get("evidence_url")
             })
             
-            # 콘솔 출력 (요구사항)
+            # 콘솔 출력 (디버깅용)
             print(f"  [명제 {c_id}] {claim_text[:40]}...")
-            print(f"    ㄴ 판정: {result.get('verdict')}")
+            print(f"    ㄴ 위험도: {risk_score:.2f} | 출처: {result.get('source_name')}")
             print(f"    ㄴ 이유: {result.get('reason')}")
-            print(f"    ㄴ 근거: {result.get('evidence_url')}")
             print("-" * 50)
 
-            if result.get("verdict") in ["FALSE", "EXAGGERATED"]:
-                total_fake_or_exaggerated_count += 1
-                
+            total_risk_score += risk_score
             verified_claims.append(claim)
 
         except Exception as e:
             print(f"  [!] 명제 {c_id} 판정 중 오류 발생: {e}")
-            claim.update({"verdict": "UNKNOWN", "reason": f"Error: {str(e)}"})
+            claim.update({"risk_score": 0.5, "reason": f"분석 오류로 인한 중간값 배정: {str(e)}"})
+            total_risk_score += 0.5
             verified_claims.append(claim)
 
     # 3. 최종 스코어 및 State 업데이트
     num_claims = len(verified_claims)
-    # 거짓이나 과장된 명제가 많을수록 점수가 높음 (위험도 기반)
-    fake_score = (total_fake_or_exaggerated_count / num_claims * 100) if num_claims > 0 else 0.0
+    # 명제별 위험도의 평균값 계산
+    final_fake_score = (total_risk_score / num_claims) if num_claims > 0 else 0.0
 
     final_packet = [main_domain]
     for c in verified_claims:
         final_packet.append(json.dumps(c, ensure_ascii=False))
         
-    state.fact.fake_score = fake_score
+    state.fact.fake_score = final_fake_score
     state.fact.fake_evidence = final_packet
     
-    print(f"\n[+] 전 명제 검증 완료. 최종 허위/과장 점수: {fake_score:.1f}점")
+    print(f"\n[+] 전 명제 검증 완료. 최종 평균 위험도 점수: {final_fake_score:.4f}")
     return state
 
 # ==========================================
@@ -517,8 +573,8 @@ def generate_final_report(state: ModerationState) -> ModerationState:
     출력 형식으로 변환합니다.
     
     변환 내용:
-    - fake_score: 0~100 → 0.0~1.0 으로 정규화
-    - fake_evidence: JSON 문자열 리스트 → 사람이 읽을 수 있는 판정 요약 리스트
+    - fake_score: 이미 0.0~1.0 이므로 그대로 유지 (반올림만 수행)
+    - fake_evidence: JSON 문자열 리스트 → 점수와 사유가 포함된 가독성 있는 리스트
     """
     print(f"\n{'='*20} 5. FINAL REPORT (POST-PROCESSING) {'='*20}")
     
@@ -526,50 +582,58 @@ def generate_final_report(state: ModerationState) -> ModerationState:
         print("[!] fact 결과가 없습니다. 후처리를 스킵합니다.")
         return state
     
-    # 1. Score 정규화 (0~100 → 0.0~1.0)
-    original_score = state.fact.fake_score
-    normalized_score = round(min(original_score / 100.0, 1.0), 4)
-    print(f"  [Score 변환]: {original_score:.1f}/100 → {normalized_score:.4f}/1.0")
+    # 1. Score 최종 정리 (이미 0.0~1.0이므로 소수점 4자리 반올림)
+    final_score = round(state.fact.fake_score, 4)
+    print(f"  [최종 위험도 점수]: {final_score:.4f}/1.0")
     
-    # 2. Evidence 변환 (JSON 문자열 → 가독성 있는 판정 요약)
+    # 2. Evidence 변환
     raw_evidence = state.fact.fake_evidence
-    readable_evidence = []
+    claims_data = []
+    main_domain_str = "MAIN_DOMAIN: GENERAL"
     
     for item in raw_evidence:
-        # MAIN_DOMAIN 헤더는 그대로 유지
         if item.startswith("MAIN_DOMAIN:"):
-            readable_evidence.append(item)
+            main_domain_str = item
             continue
-        
         try:
-            claim = json.loads(item)
-            verdict = claim.get("verdict", "UNKNOWN")
-            claim_text = claim.get("claim_text", "")
-            reason = claim.get("reason", "")
-            evidence_url = claim.get("evidence_url", "")
-            
-            # 판정 아이콘 매핑
-            icon = {"TRUE": "✅", "FALSE": "❌", "EXAGGERATED": "⚠️", "UNKNOWN": "❓"}.get(verdict, "❓")
-            
-            # 사람이 읽을 수 있는 요약 문자열 생성
-            summary = f"{icon} [{verdict}] {claim_text[:60]}{'...' if len(claim_text) > 60 else ''}"
-            if reason:
-                summary += f" | 사유: {reason[:80]}{'...' if len(reason) > 80 else ''}"
-            if evidence_url:
-                summary += f" | 출처: {evidence_url}"
-            
-            readable_evidence.append(summary)
+            claims_data.append(json.loads(item))
         except (json.JSONDecodeError, AttributeError):
-            # JSON 파싱 실패 시 원본 그대로 유지
-            readable_evidence.append(item)
+            continue
+
+    # 정렬 로직 변경: 1순위 - 공신력 점수(낮을수록 좋음), 2순위 - 위험도(높을수록 중요)
+    sorted_claims = sorted(
+        claims_data, 
+        key=lambda x: (
+            get_source_authority_score(x.get('evidence_url', '')), 
+            -x.get('risk_score', 0.0)
+        )
+    )
+    
+    top_two_claims = sorted_claims[:2]
+
+    readable_evidence = [main_domain_str]
+    
+    for claim in top_two_claims:
+        claim_text = claim.get("claim_text", "")
+        reason = claim.get("reason", "")
+        source_name = claim.get("source_name", "확인된 출처")
+        
+        # 사용자 요청 양식:
+        # 내용 : {명제}
+        # 분석 : {분석내용}
+        # 출처 : {출처명}
+        summary = f"내용 : {claim_text.strip()}\n분석 : {reason.strip()}\n출처 : {source_name.strip()}"
+        
+        readable_evidence.append(summary)
     
     # 3. State 업데이트
-    state.fact.fake_score = normalized_score
+    state.fact.fake_score = final_score
     state.fact.fake_evidence = readable_evidence
     
-    print(f"  [Evidence 변환]: {len(raw_evidence)}건 → {len(readable_evidence)}건 (가독성 형태)")
+    print(f"  [Evidence 변환]: {len(raw_evidence)-1}건 중 상위 2건 선별 완료.")
     for i, ev in enumerate(readable_evidence):
-        print(f"    {i+1}. {ev[:100]}{'...' if len(ev) > 100 else ''}")
+        if not ev.startswith("MAIN_DOMAIN:"):
+            print(f"    [{i}]\n{ev}")
     
     print(f"\n[+] 후처리 완료. graph.py로 반환 준비 완료.")
     return state
