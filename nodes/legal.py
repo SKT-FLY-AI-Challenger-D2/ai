@@ -81,6 +81,7 @@ analysis_template = """
 {script}
 
 **⚖️ 심사 및 판정 가이드라인 (Prudent Review):**
+<<<<<<< HEAD
 
 **[JSON 출력 형식 준수]**
 'legal_issue_score'에는 법적 문제가 있을 확률, 'legal_issue_evidence'에는 법적 문제가 있다는 근거들을 작성해주세요.
@@ -94,6 +95,10 @@ analysis_template = """
   "legal_issue_evidence": ["(식품표시광고법 제10조) 영상 내에서 자율심의필증 확인 안됨", "(식품위생법 제13조) 일반 식품을 소화제로 오인 소지"]
 }}
 ```
+=======
+(이하 가이드라인 및 JSON 형식 지침 동일)
+...
+>>>>>>> 3ccf83316e96eb84197f22b0627669bb0fd8bce4
 """
 
 
