@@ -14,3 +14,9 @@ fastapi
 uvicorn
 langchain-chroma
 opencv-python
+aiohttp
+beautifulsoup4
+pymupdf
+pytesseract
+Pillow
+pyhwp

@@ -28,14 +28,14 @@ def get_face_start_time(video_path):
     video.release()
     return 0
 
-def extract_cropped_face_frames(video_path, start_time, count=15):
+def extract_cropped_face_frames(video_path, start_time, count=20):
     """얼굴 감지 시점부터 3초간 20장의 고해상도 얼굴 크롭 이미지 추출"""
     video = cv2.VideoCapture(video_path)
     fps = video.get(cv2.CAP_PROP_FPS) or 30
     
     # 분석 구간 설정 (시작점부터 3초간)
     start_frame = int(start_time * fps)
-    end_frame = int((start_time + 4) * fps)
+    end_frame = int((start_time + 3) * fps)
     interval = max(1, (end_frame - start_frame) // count)
     
     image_parts = []
@@ -91,28 +91,19 @@ def detector_node(state: ModerationState) -> dict:
         # 2. 요약된 응답을 위한 강화된 프롬프트
         prompt = """
         [역할: 최고 등급 디지털 영상 포렌식 수사관]
-        제공된 15장의 고해상도 연속 프레임(약 4초 구간)을 분석하여 딥페이크(AI 얼굴 교체 및 생성) 여부를 판별하라.
-
-        [중요: 오탐 주의 지침 - 가장 중요한 원칙]
-        다음 현상은 AI 조작이 아닌 '환경적 요인'으로 간주하여 score를 보수적으로(낮게) 측정하라. 아래 현상으로 설명될 수 있는 결함이라면 반드시 실제 인물 영상으로 간주한다.
-        1. 강한 조명으로 인한 화이트아웃(접시물 현상) 및 피부 질감 상실.
-        2. 유튜브 압축 노이즈(Block Artifacts) 및 저화질로 인한 경계선 깨짐, 입술/치아 주변의 단순 뭉개짐.
-        3. 뷰티 필터(매끄러운 피부, 얼굴 윤곽 보정) 적용은 인간의 의도적 영상 편집일 뿐 AI 생성물이 아님.
-
-        [판정 지침 - AI 조작의 결정적 증거]
-        오직 '생성형 AI' 특유의 시공간적, 물리적 결함에만 집중하라:
-        - 눈동자 내부의 비대칭적 반사광 모순.
-        - 입술과 치아의 기괴한 물리적 융합 (저화질로 인한 단순 뭉개짐이 아닌 3D 형태학적 파괴).
-        - 15프레임 흐름상 배경 및 이목구비의 비정상적인 요동(지터링) 현상.
-        조금이라도 모호하거나 환경적 요인으로 설명 가능한 경우 score를 매우 낮게 측정하라.
+        제공된 20장의 고해상도 프레임을 분석하여 딥페이크 여부를 판별하라.
         
+        [판정 지침]
+        - 단순 피부 보정 필터는 정상으로 간주할 것.
+        - 눈동자 반사광 불일치, 입술 경계선 왜곡, 치아 구조의 비물리적 뭉개짐 등 생성 AI 특유의 결함을 찾을 것.
+
         [응답 규칙]
         1. 반드시 아래 JSON 형식으로만 응답하라.
-        2. 'evidence'에는 종합적으로 가장 결정적인 증거 2가지만 각각 한 문장씩, 총 두 문장으로 간단히 기술하라. (만약 환경적 요인으로 인해 실제 영상으로 판정했다면, 그 이유를 증거란에 명시할 것)
-
+        2. 'evidence'에는 종합적으로 가장 결정적인 증거 2가지만 각각 한 문장씩, 총 두 문장으로 간단히 기술하라.
+        
         {
-        "score": (0.0~1.0 사이),
-        "evidence": ["첫 번째 핵심 증거", "두 번째 핵심 증거"]
+          "score": (0.0~1.0 사이),
+          "evidence": ["첫 번째 핵심 증거", "두 번째 핵심 증거"]
         }
         """
         
