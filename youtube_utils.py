@@ -6,7 +6,7 @@ from moviepy import VideoFileClip
 from google import genai
 import time
 
-def download_video(url, output_dir="downloads", clip_duration=30):
+def download_video(url, output_dir="downloads", clip_duration=60):
     """
     If video duration >= clip_duration:
         download middle clip_duration seconds
