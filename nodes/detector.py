@@ -2,6 +2,9 @@ import cv2
 import os
 import json
 import numpy as np
+import base64
+import requests
+import time
 from google import genai
 from google.genai import types
 from schemas import ModerationState, DeepfakeResult
@@ -70,55 +73,130 @@ def extract_cropped_face_frames(video_path, start_time, count=20):
     video.release()
     return image_parts
 
+# url 수정 필요 
+
+def invoke_custom_model(image_bytes: bytes) -> dict:
+    """자체 Deepfake 탐지 모델(RunPod) 호출 (영어 프롬프트/응답)"""
+    DEFAULT_URL = "https://prw3dsex3tepfl-8000.proxy.runpod.net/inference"
+    # 사용자가 지정한 프롬프트 템플릿
+    prompt = "<image>\nIs this image fake or real?\nASSISTANT:"
+    
+    try:
+        img_b64 = base64.b64encode(image_bytes).decode('utf-8')
+        payload = {
+            "prompt": prompt,
+            "image_base64": img_b64
+        }
+        
+        # 외부 API 호출
+        print(f"[Detector] 자체 모델 호출 시도: {DEFAULT_URL}")
+        response = requests.post(DEFAULT_URL, json=payload, timeout=10)
+        if response.status_code == 200:
+            # 서버 응답에서 'result' 필드 사용
+            res_content = response.json().get("result", "").lower()
+            # "fake" 포함 여부 확인
+            is_fake = "fake" in res_content
+            print(f"[Detector] 자체 모델 응답 수신 성공: {res_content}")
+            return {"status": "success", "is_fake": is_fake, "raw": res_content}
+        else:
+            print(f"[Detector] 자체 모델 호출 실패 (Status: {response.status_code})")
+            return {"status": "error", "message": f"API Error: {response.status_code}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 def detector_node(state: ModerationState) -> dict:
     """
     고해상도 얼굴 포렌식 분석 노드
     최종 결과에서 score와 2가지 핵심 증거(evidence)만 추출함.
     """
-    print(f"--- [Detector Node] 정밀 분석 시작 ---\n대상 파일: {state.video_path}")
+    start_time_str = time.strftime("%H:%M:%S")
+    print(f"--- [Detector Node] 시작 시각: {start_time_str} ---")
+    print(f"대상 파일: {state.video_path}")
     
     if not state.video_path or not os.path.exists(state.video_path):
         return {"deepfake": DeepfakeResult(deepfake_ai_score=0.0, deepfake_ai_evidence=["영상 파일 없음"])}
 
     try:
-        # 1. 얼굴 탐지 및 프레임 추출 (창현님 로직)
+        # 1. 얼굴 탐지 및 프레임 추출
         start_pt = get_face_start_time(state.video_path)
-        face_frames = extract_cropped_face_frames(state.video_path, start_time=start_pt)
+        face_frames = extract_cropped_face_frames(state.video_path, start_time=start_pt, count=20)
         
+        if not face_frames:
+            return {"deepfake": DeepfakeResult(deepfake_ai_score=0.0, deepfake_ai_evidence=["얼굴 감지 실패"])}
+
+        # 2. 자체 모델(High Precision Gate) 호출 - 단일 프레임 사용
+        single_face_bytes = face_frames[0].inline_data.data
+        custom_result = invoke_custom_model(single_face_bytes)
+        print(f"[Custom Model] Result: {custom_result}")
+
+        # Gemini 클라이언트 설정
         api_key = os.environ.get("GOOGLE_API_KEY")
         client = genai.Client(api_key=api_key)
         
-        # 2. 요약된 응답을 위한 강화된 프롬프트
-        prompt = """
-        [역할: 최고 등급 디지털 영상 포렌식 수사관]
-        제공된 20장의 프레임을 분석하여 딥페이크 또는 고도로 정교한 '가상 인간' 여부를 판별하라.
-
-        [1. 핵심 판별 지침: 가짜의 '정적' 특징 탐지]
-        - 텍스처 고착화(Texture Fixation): 웃거나 말할 때 주름이나 잡티의 위치가 피부 움직임에 따라 유동적으로 변하지 않고, 마치 스티커처럼 특정 좌표에 고정되어 있는지 확인하라.
-        - 안구 및 구강의 깊이감: 가상 인간은 눈동자의 투명도와 구강 내부(치아 뒤쪽 공간)의 어둠이 평면적으로 렌더링되는 경향이 있다. 공간적 깊이감이 물리적으로 타당한지 분석하라.
-        - 인위적 노이즈: 실제 잡티와 구별되는 '반복적인 디지털 패턴'의 잡티나, 피부 노이즈가 안면의 굴곡을 무시하고 평면적으로 씌워져 있는지 포착하라.
-
-        [2. 실제 인물 판정 지침: '동적' 불완전성]
-        - 동적 생리 현상: 단순히 주름이 있는 것이 아니라, 표정에 따라 근육이 수축하며 주름의 깊이가 실시간으로 변하고, 혈류 변화로 인해 피부색이 미세하게 바뀌는 '동적 변화'가 있다면 실제 인물이다.
-        - 외부 상호작용: 안경 테와 닿는 부위의 피부 눌림, 손가락이 얼굴을 스칠 때의 미세한 그림자 왜곡 등 '물체 간 물리적 상호작용'이 완벽하다면 실제 인물로 간주하라.
-
-        [3. 응답 규칙]
-        1. 반드시 아래 JSON 형식으로만 응답하라.
-        2. 'evidence'에는 외형적 특징이 아닌 '물리적/동적 불일치' 관점의 증거 2가지를 기술하라.
-
-        {
-        "score": (0.0~1.0 사이),
-        "evidence": ["첫 번째 핵심 증거", "두 번째 핵심 증거"]
-        }
-        """
+        # 3. 분기에 따른 프롬프트 설정
+        is_custom_fake = custom_result.get("is_fake")
         
+        if is_custom_fake:
+            # [CASE 1] 자체 모델이 Fake라고 판정한 경우 (정밀 확인 및 증거 수집)
+            print("--- [Detector] 자체 모델 Fake 판정 -> Gemini 정밀 확인 모드 ---")
+            prompt = """
+            [역할: 최고 등급 디지털 영상 포렌식 수사관]
+            전단계 분석 모델이 이 영상을 'FAKE'로 판정했다. 
+            제공된 20장의 프레임을 분석하여 이 판정을 검증하고, 구체적인 시각적 증거(아티팩트) 2가지를 찾아라.
+
+            [분석 중점]
+            - 얼굴 경계면의 부자연스러운 계단 현상이나 블렌딩 오류.
+            - 눈동자 반사광의 비일관성 또는 구강 내부의 평면적 질감.
+            - 표정 변화 시 특정 피부 영역의 텍스처 고착 현상.
+
+            [응답 규칙]
+            1. 반드시 아래 JSON 형식으로만 응답하라.
+            2. 'evidence'에는 판정을 뒷받침하는 구체적인 물리적 결함 2가지를 기술하라.
+            3. 'score'는 0.5(의심) ~ 1.0(확신) 사이로 책정하라. (1.0에 가까울수록 확실한 가짜임)
+
+            {
+            "score": (0.5~1.0),
+            "evidence": ["첫 번째 증거", "두 번째 증거"]
+            }
+            """
+        else:
+            # [CASE 2] 자체 모델이 Real이라고 하거나 에러인 경우 (독자적인 표준 분석 수행)
+            print("--- [Detector] 자체 모델 Real 판정(혹은 에러) -> Gemini 표준 분석 모드 ---")
+            prompt = """
+            [역할: 최고 등급 디지털 영상 포렌식 수사관]
+            제공된 20장의 프레임을 분석하여 딥페이크 또는 고도로 정교한 '가상 인간' 여부를 판별하라.
+
+            [1. 핵심 판별 지침: 가짜의 '정적' 특징 탐지]
+            - 텍스처 고착화(Texture Fixation): 웃거나 말할 때 주름이나 잡티의 위치가 피부 움직임에 따라 유동적으로 변하지 않고, 마치 스티커처럼 특정 좌표에 고정되어 있는지 확인하라.
+            - 안구 및 구강의 깊이감: 가상 인간은 눈동자의 투명도와 구강 내부의 어둠이 평면적으로 렌더링되는 경향이 있다. 
+            - 인위적 노이즈: 실제 잡티와 구별되는 '반복적인 디지털 패턴'의 잡티 탐지.
+
+            [2. 실제 인물 판정 지침: '동적' 불완전성]
+            - 동적 생리 현상: 근육이 수축하며 주름의 깊이가 실시간으로 변하고 피부색이 미세하게 바뀌는 '동적 변화' 확인.
+            - 외부 상호작용: 물체 간 물리적 상호작용(그림자, 피부 눌림)의 완벽함 확인.
+
+            [3. 응답 규칙]
+            1. 반드시 아래 JSON 형식으로만 응답하라.
+            2. 'evidence'에는 외형적 특징이 아닌 '물리적/동적 불일치' 관점의 증거 2가지를 기술하라.
+            3. 'score'는 0.0(완전 실제) ~ 1.0(완전 가짜) 사이로 책정하라. (1.0에 가까울수록 딥페이크일 확률이 높음)
+
+            {
+            "score": (0.0~1.0),
+            "evidence": ["첫 번째 증거", "두 번째 증거"]
+            }
+            """
+
+        # Gemini 호출
+        print(f"[Detector] Gemini 호출 시도 (Model: {client.models.get_model('gemini-3-flash-preview').name if hasattr(client.models, 'get_model') else 'gemini-3-flash-preview'})")
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
             contents=face_frames + [prompt],
             config=types.GenerateContentConfig(temperature=0.1, top_p=0.85)
         )
+        print("[Detector] Gemini 응답 수신 성공")
+        print("Gemini Response: ", response.text)
 
-        # 3. 결과 파싱
+        # 4. 결과 파싱
         res_text = response.text.strip()
         if "```json" in res_text:
             res_text = res_text.split("```json")[1].split("```")[0].strip()
@@ -127,12 +205,13 @@ def detector_node(state: ModerationState) -> dict:
         
         data = json.loads(res_text)
         
-        # schemas.py 구조에 맞게 변환 (score와 2개의 문장만 전달)
         result = DeepfakeResult(
             deepfake_ai_score=float(data.get("score", 0.0)),
-            deepfake_ai_evidence=data.get("evidence", [])[:2] # 확실히 2개만 추출
+            deepfake_ai_evidence=data.get("evidence", [])[:2]
         )
 
+        end_time_str = time.strftime("%H:%M:%S")
+        print(f"--- [Detector Node] 종료 시각: {end_time_str} ---")
         return {"deepfake": result}
 
     except Exception as e:

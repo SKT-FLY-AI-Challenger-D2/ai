@@ -14,6 +14,7 @@ import subprocess
 import pytesseract
 from PIL import Image
 import re
+import time
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from schemas import ModerationState, FactResult
@@ -22,6 +23,16 @@ from schemas import ModerationState, FactResult
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")
+
+# ==========================================
+# Speed knobs (추가)
+# ==========================================
+K_CLAIMS = 2                 # k=10 -> 2
+SERPER_NUM = 2               # query당 결과 개수(기존 3)
+MAX_URLS_PER_CLAIM = 3       # 명제당 스크래핑할 URL 상한
+SCRAPE_CONCURRENCY = 8       # 본문 스크래핑 동시성 제한 (너무 크면 오히려 느려짐/차단)
+PDF_OCR_MAX_PAGES = 1        # OCR 돌릴 최대 페이지 수 (0이면 OCR 비활성도 가능)
+
 
 # 도메인별 공신력 화이트리스트
 DOMAIN_WHITELISTS = {
@@ -59,14 +70,11 @@ def data_preprocessing(state: ModerationState) -> ModerationState:
     
     state.input_text = cleaned
     
-    print(f"  [원본 길이]: {len(raw_text)}자 → [정제 후]: {len(cleaned)}자")
-    
     return state
 
 # ==========================================
 # 1. 분석 노드 (Analysis Node)
 # ==========================================
-
 def analyze_script(state: ModerationState) -> ModerationState:
     """
     LLM을 사용하여 광고 스크립트의 도메인을 분류하고 명제 및 키워드를 추출합니다.
@@ -131,13 +139,14 @@ def analyze_script(state: ModerationState) -> ModerationState:
             config={"response_mime_type": "application/json"}
         )
 
-        # 1. LLM이 내뱉은 Raw Output 출력 (요청사항 반영)
         raw_json_text = response.text.strip()
-        print(f"[RAW LLM OUTPUT]\n{raw_json_text}\n")
-
-        # 2. 후속 공정을 위한 JSON 파싱
         analysis_data = json.loads(raw_json_text)
-        
+
+        # ✅ (추가) 모델이 규칙을 안 지킬 때를 대비해 강제 컷
+        claims = analysis_data.get("claims", []) or []
+        analysis_data["claims"] = claims[:K_CLAIMS]
+        analysis_data["total_claims_count"] = len(analysis_data["claims"])
+
         evidence_packet = [f"MAIN_DOMAIN: {analysis_data.get('main_domain')}"]
         for claim in analysis_data.get("claims", []):
             evidence_packet.append(json.dumps(claim, ensure_ascii=False))
@@ -157,11 +166,10 @@ def analyze_script(state: ModerationState) -> ModerationState:
 # ==========================================
 # 2. 정보 검색 노드 (Information Search Node)
 # ==========================================
-
 async def fetch_serper(session: aiohttp.ClientSession, query: str) -> List[Dict]:
     url = "https://google.serper.dev/search"
     headers = {'X-API-KEY': SERPER_API_KEY, 'Content-Type': 'application/json'}
-    payload = json.dumps({"q": query, "gl": "kr", "hl": "ko", "num": 3}) # 결과 개수 조절
+    payload = json.dumps({"q": query, "gl": "kr", "hl": "ko", "num": SERPER_NUM})  # ✅ num 조절
     
     try:
         async with session.post(url, headers=headers, data=payload) as response:
@@ -169,8 +177,9 @@ async def fetch_serper(session: aiohttp.ClientSession, query: str) -> List[Dict]
                 result = await response.json()
                 return result.get('organic', [])
             return []
-    except Exception as e:
+    except Exception:
         return []
+
 
 async def search_evidence_task(state: ModerationState) -> ModerationState:
     print(f"\n{'='*20} 2. AS_SYNC INFORMATION SEARCH STEP {'='*20}")
@@ -207,18 +216,14 @@ async def search_evidence_task(state: ModerationState) -> ModerationState:
         print(f"[*] 총 {len(search_tasks)}개의 비동기 쿼리 전송 중...")
         all_results = await asyncio.gather(*search_tasks)
 
-        # 2. 결과 처리부: results, c_id 등 루프 외부 변수 참조 오류 해결
+        # 2. 결과 처리부
         for idx, results in enumerate(all_results):
             meta = task_metadata[idx]
             c_id = meta["id"]
-            current_query = meta["query"]
             
             if results:
-                print(f"  [Search OK] 명제 {c_id} | 쿼리: {current_query}")
                 for res in results:
-                    print(f"    - {res.get('title')} ({res.get('link')})")
-                    
-                    # 3. 필터링 없이 수집된 결과 그대로 저장
+                    # 필터링 없이 수집된 결과 그대로 저장
                     collected_data[c_id]["results"].append({
                         "title": res.get("title"),
                         "link": res.get("link"),
@@ -245,12 +250,10 @@ def search_evidence(state: ModerationState) -> ModerationState:
 # ==========================================
 # 3. 본문 스크래핑 노드 (Content Scraping Node)
 # ==========================================
-
 async def fetch_full_text(session: aiohttp.ClientSession, url: str) -> str:
     """HTML과 PDF를 모두 처리하여 순수 본문 텍스트를 추출합니다."""
-    # MuPDF 엔진의 내부 경고 노이즈 차단
-    fitz.TOOLS.mupdf_display_errors(False) 
-    
+    fitz.TOOLS.mupdf_display_errors(False)
+
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,webp,image/apng,*/*;q=0.8',
@@ -258,8 +261,7 @@ async def fetch_full_text(session: aiohttp.ClientSession, url: str) -> str:
     }
 
     try:
-        # 405 에러 방지: 반드시 GET을 사용하고 리다이렉트를 허용합니다.
-        async with session.get(url, headers=headers, timeout=30, allow_redirects=True, ssl=False) as response:
+        async with session.get(url, headers=headers, timeout=20, allow_redirects=True, ssl=False) as response:
             if response.status != 200:
                 return f"Fail: Status Code {response.status}"
 
@@ -269,92 +271,128 @@ async def fetch_full_text(session: aiohttp.ClientSession, url: str) -> str:
 
             content_type = response.headers.get('Content-Type', '').lower()
 
-            # [CASE 1] PDF 처리 (중국어 깨짐 체크)
+            # [CASE 1] PDF 처리
             if 'application/pdf' in content_type or content_bytes.startswith(b'%PDF'):
                 try:
                     doc = fitz.open(stream=io.BytesIO(content_bytes), filetype="pdf")
                     full_text = ""
-                    
-                    for page in doc:
-                        # 1차 시도: 일반 텍스트 추출
-                        page_text = page.get_text().strip()
-                        
-                        # 한글이 포함되어 있는지 검사 (정상 여부 판단)
+
+                    # ✅ (추가) OCR 포함 최대 페이지 제한
+                    max_pages = min(len(doc), max(1, PDF_OCR_MAX_PAGES))
+                    for i in range(max_pages):
+                        page = doc.load_page(i)
+                        page_text = (page.get_text() or "").strip()
+
                         is_korean = any('\uac00' <= c <= '\ud7a3' for c in page_text)
-                        
-                        if is_korean and len(page_text) > 50:
-                            # 정상적인 한글 텍스트로 판단
+                        if is_korean and len(page_text) > 80:
                             full_text += page_text + " "
                         else:
-                            # 깨졌거나 이미지라면 OCR 가동 (300DPI 고화질 렌더링)
+                            # OCR 비활성화 옵션: PDF_OCR_MAX_PAGES <= 0 같은 방식도 가능
+                            if PDF_OCR_MAX_PAGES <= 0:
+                                continue
                             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
                             img = Image.open(io.BytesIO(pix.tobytes()))
-                            # tesseract를 사용하여 한글+영어 추출
                             ocr_text = pytesseract.image_to_string(img, lang='kor+eng')
                             full_text += ocr_text + " "
-                    
+
                     doc.close()
-                    if not full_text.strip(): return "Fail: PDF is empty even after OCR"
-                    return "[PDF 전문 수집(OCR포함)] " + " ".join(full_text.split())
+                    full_text = " ".join(full_text.split())
+                    if not full_text:
+                        return "Fail: PDF empty or OCR disabled"
+                    return "[PDF 전문 수집(OCR포함)] " + full_text
                 except Exception as e:
                     return f"Fail: PDF/OCR Error ({str(e)})"
 
-            # [CASE 2] HWP 처리 (기존 로직 유지)
+            # [CASE 2] HWP
             elif 'application/x-hwp' in content_type or 'hwp' in url.lower() or content_bytes.startswith(b'\xd0\xcf\x11\xe0'):
                 try:
                     temp_hwp_path = f"temp_{os.getpid()}_{hash(url)}.hwp"
-                    with open(temp_hwp_path, "wb") as f: f.write(content_bytes)
-                    process = subprocess.run(['hwp5txt', temp_hwp_path], capture_output=True, text=True, encoding='utf-8', errors='ignore')
+                    with open(temp_hwp_path, "wb") as f:
+                        f.write(content_bytes)
+                    process = subprocess.run(
+                        ['hwp5txt', temp_hwp_path],
+                        capture_output=True,
+                        text=True,
+                        encoding='utf-8',
+                        errors='ignore'
+                    )
                     extracted_text = process.stdout
-                    if os.path.exists(temp_hwp_path): os.remove(temp_hwp_path)
+                    if os.path.exists(temp_hwp_path):
+                        os.remove(temp_hwp_path)
                     return "[HWP 전문 수집됨] " + " ".join((extracted_text or "").split())
                 except Exception as e:
                     return f"Fail: HWP Parsing Error ({str(e)})"
 
-            # [CASE 3] 일반 HTML 처리 (한글 깨짐 방지)
+            # [CASE 3] HTML
             else:
                 try:
-                    # 한국 웹사이트 특성에 맞게 cp949 디코딩 우선 시도
                     try:
                         html = content_bytes.decode('cp949')
                     except UnicodeDecodeError:
                         html = content_bytes.decode('utf-8', errors='ignore')
-                    
+
                     soup = BeautifulSoup(html, 'html.parser')
                     for el in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
                         el.decompose()
-                    
+
                     clean_text = " ".join(soup.get_text(separator=' ').split())
                     return clean_text if clean_text else "Fail: No readable text found"
                 except Exception as e:
                     return f"Fail: HTML Processing Error ({str(e)})"
-
     except Exception as e:
         return f"Fail: {str(e)}"
 
+
 async def scrape_evidence_task(state: ModerationState) -> ModerationState:
     print(f"\n{'='*20} 3. FULL CONTENT SCRAPING STEP {'='*20}")
-    
+
     if not state.fact or not state.fact.fake_evidence:
         return state
 
     main_domain = state.fact.fake_evidence[0].replace("MAIN_DOMAIN: ", "")
     claims_json = state.fact.fake_evidence[1:]
-    
+
+    # ✅ (추가) 명제별 URL을 "공신력 우선"으로 제한 수집
     all_urls = []
+    per_claim_urls = {}  # claim_id -> [urls]
+
     for claim_str in claims_json:
         claim_data = json.loads(claim_str)
+        c_id = claim_data.get("claim_id")
+        urls = []
+
         for res in claim_data.get("collected_info", []):
             link = res.get("link")
             if link and link.startswith("http"):
-                all_urls.append(link)
+                urls.append(link)
 
-    print(f"[*] 총 {len(all_urls)}개의 모든 URL 본문 추출 시작 (전수 조사)...")
+        # 중복 제거(명제 내부)
+        urls = list(dict.fromkeys(urls))
+
+        # 공신력 점수로 정렬(낮을수록 공신력 높음)
+        urls.sort(key=get_source_authority_score)
+
+        # ✅ 상위 N개만 스크래핑
+        urls = urls[:MAX_URLS_PER_CLAIM]
+        per_claim_urls[c_id] = urls
+        all_urls.extend(urls)
+
+    # ✅ (추가) 전체 중복 제거
+    all_urls = list(dict.fromkeys(all_urls))
+
+    print(f"[*] 스크래핑 대상 URL: 총 {len(all_urls)}개 (명제당 최대 {MAX_URLS_PER_CLAIM})")
 
     connector = aiohttp.TCPConnector(ssl=False)
-    
+
+    # ✅ (추가) 동시성 제한 세마포어
+    sem = asyncio.Semaphore(SCRAPE_CONCURRENCY)
+
+    async def bounded_fetch(url: str) -> str:
+        async with sem:
+            return await fetch_full_text(session, url)
+
     async with aiohttp.ClientSession(connector=connector) as session:
-        scrape_tasks = [fetch_full_text(session, url) for url in all_urls]
+        scrape_tasks = [bounded_fetch(url) for url in all_urls]
         contents = await asyncio.gather(*scrape_tasks)
 
     url_to_content = dict(zip(all_urls, contents))
@@ -362,28 +400,23 @@ async def scrape_evidence_task(state: ModerationState) -> ModerationState:
     final_packet = [f"MAIN_DOMAIN: {main_domain}"]
     for claim_str in claims_json:
         claim_data = json.loads(claim_str)
-        c_id = claim_data["claim_id"]
-        
+        c_id = claim_data.get("claim_id")
+
+        # ✅ (추가) 제한된 URL만 full_text 붙이기
+        allowed = set(per_claim_urls.get(c_id, []))
+
         for res in claim_data.get("collected_info", []):
             res_link = res.get("link")
-            # 본문 전문 추출 및 변수 할당 (NameError 방지)
-            full_text = url_to_content.get(res_link, "No content retrieved.")
-            res["full_text"] = full_text
-
-            # --- 콘솔 출력 로직 ---
-            print(f"  ㄴ URL: {res_link}")
-            if full_text.startswith("Fail:"):
-                print(f"     [!] 수집 실패: {full_text}")
+            if res_link in allowed:
+                res["full_text"] = url_to_content.get(res_link, "No content retrieved.")
             else:
-                preview = full_text[:].replace('\n', ' ')
-                print(f"     [본문 요약]: {preview}...")
-                print(f"     [글자 수]: {len(full_text)}자")
-            print("-" * 50)
-        
+                # 스크래핑 안 한 것들은 snippet만 활용하도록 표시
+                res["full_text"] = "Skipped: not in top-N URLs for this claim."
+
         final_packet.append(json.dumps(claim_data, ensure_ascii=False))
 
     state.fact.fake_evidence = final_packet
-    print(f"[+] 본문 전수 수집 완료. (총 {len(all_urls)}건)")
+    print(f"[+] 본문 수집 완료. (총 {len(all_urls)}건)")
     return state
 
 def scrape_evidence(state: ModerationState) -> ModerationState:
@@ -507,6 +540,7 @@ def verify_facts(state: ModerationState) -> ModerationState:
   "risk_score": 0.01~0.99 사이의 실수,
   "reason": "분석 내용 (반드시 '~니다.'로 종료)",
   "source_name": "출처명 (기관명 - 제목 | 사이트명)",
+  "concise_summary": "핵심 반박/검증 내용을 한 문장으로 요약 (ex. 바세린의 수면 개선 효과를 뒷받침하는 어떠한 의학적, 과학적 근거도 찾을 수 없습니다.)"
   "evidence_quote": "본문에서 근거가 된 핵심 문구 직접 인용 (없으면 빈 문자열)",
   "evidence_url": "해당 근거가 포함된 원본 URL"
 }}
@@ -530,15 +564,10 @@ def verify_facts(state: ModerationState) -> ModerationState:
                 "risk_score": risk_score,
                 "reason": result.get("reason"),
                 "source_name": result.get("source_name", "확인된 출처"),
+                "concise_summary": result.get("concise_summary", "요약 정보 없음"),
                 "evidence_quote": result.get("evidence_quote"),
                 "evidence_url": result.get("evidence_url")
             })
-            
-            # 콘솔 출력 (디버깅용)
-            print(f"  [명제 {c_id}] {claim_text[:40]}...")
-            print(f"    ㄴ 위험도: {risk_score:.2f} | 출처: {result.get('source_name')}")
-            print(f"    ㄴ 이유: {result.get('reason')}")
-            print("-" * 50)
 
             total_risk_score += risk_score
             verified_claims.append(claim)
@@ -611,29 +640,15 @@ def generate_final_report(state: ModerationState) -> ModerationState:
     
     top_two_claims = sorted_claims[:2]
 
-    readable_evidence = [main_domain_str]
+    readable_evidence = []
     
     for claim in top_two_claims:
-        claim_text = claim.get("claim_text", "")
-        reason = claim.get("reason", "")
-        source_name = claim.get("source_name", "확인된 출처")
-        
-        # 사용자 요청 양식:
-        # 내용 : {명제}
-        # 분석 : {분석내용}
-        # 출처 : {출처명}
-        summary = f"내용 : {claim_text.strip()}\n분석 : {reason.strip()}\n출처 : {source_name.strip()}"
-        
-        readable_evidence.append(summary)
-    
+        concise_summary = claim.get("concise_summary", "요약 정보 없음")
+        readable_evidence.append(concise_summary.strip())
+
     # 3. State 업데이트
     state.fact.fake_score = final_score
     state.fact.fake_evidence = readable_evidence
-    
-    print(f"  [Evidence 변환]: {len(raw_evidence)-1}건 중 상위 2건 선별 완료.")
-    for i, ev in enumerate(readable_evidence):
-        if not ev.startswith("MAIN_DOMAIN:"):
-            print(f"    [{i}]\n{ev}")
     
     print(f"\n[+] 후처리 완료. graph.py로 반환 준비 완료.")
     return state
@@ -648,12 +663,18 @@ def fact_check_node(state: ModerationState) -> dict:
     내부적으로 5단계 팩트체크 파이프라인을 순차 실행합니다.
     """
     
+    start_time_str = time.strftime("%H:%M:%S")
+    print(f"--- [Fact Check Node] 시작 시각: {start_time_str} ---")
+    
     state = data_preprocessing(state)   # 0. 데이터 전처리  
     state = analyze_script(state)       # 1. 스크립트 분석
     state = search_evidence(state)      # 2. 정보 검색
     state = scrape_evidence(state)      # 3. 정보 수집
     state = verify_facts(state)         # 4. 검증
     state = generate_final_report(state) # 5. 리포트 생성
+    
+    end_time_str = time.strftime("%H:%M:%S")
+    print(f"--- [Fact Check Node] 종료 시각: {end_time_str} ---")
     
     return {"fact": state.fact}
 
