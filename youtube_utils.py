@@ -22,49 +22,37 @@ def download_video(url, output_dir="downloads", clip_duration=60):
         info = ydl.extract_info(url, download=False)
         duration = info.get("duration", 0)
 
-    # 2️⃣ 옵션 설정 (전체 다운로드)
+    # 2️⃣ 옵션 설정
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': os.path.join(output_dir, '%(id)s_full.%(ext)s'), # 일단 _full로 저장
+        'outtmpl': os.path.join(output_dir, '%(id)s.%(ext)s'),
         'noplaylist': True,
         'merge_output_format': 'mp4',
         'quiet': True,
     }
 
-    print(f"[INFO] Downloading full video (original duration={duration}s)")
-    
-    # 3️⃣ 실제 다운로드
+    # 3️⃣ 자르기 필요 시 범위 설정 (YT-DLP Native Clipping)
+    if duration > clip_duration:
+        half = clip_duration / 2
+        start_time = max(0, duration / 2 - half)
+        end_time = min(duration, duration / 2 + half)
+        print(f"[INFO] Clipping middle {clip_duration}s of video ({start_time}s ~ {end_time}s)...")
+        
+        ydl_opts['download_ranges'] = lambda info, ctx: [{
+            'start_time': start_time,
+            'end_time': end_time,
+            'title': 'section',
+        }]
+        ydl_opts['force_keyframes_at_cuts'] = True
+    else:
+        print(f"[INFO] Video is short ({duration}s). No clipping needed.")
+
+    # 4️⃣ 실제 다운로드
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        full_video_path = ydl.prepare_filename(info)
+        final_video_path = ydl.prepare_filename(info)
 
-    final_video_path = os.path.join(output_dir, f"{info['id']}.mp4")
-
-    # 4️⃣ 자르기 로직 (moviepy 사용)
-    if duration > clip_duration:
-        from moviepy import VideoFileClip
-        print(f"[INFO] Clipping middle {clip_duration}s of video...")
-        try:
-            half = clip_duration / 2
-            start_time = max(0, duration / 2 - half)
-            end_time = min(duration, duration / 2 + half)
-            
-            with VideoFileClip(full_video_path) as video:
-                clipped_video = video.subclipped(start_time, end_time)
-                clipped_video.write_videofile(final_video_path, codec="libx264", audio_codec="aac", logger=None)
-            
-            # 원본(_full) 파일 삭제
-            if os.path.exists(full_video_path):
-                os.remove(full_video_path)
-            
-            print(f"[SUCCESS] Clipped video saved to {final_video_path}")
-            print(f"[INFO] Clipped video duration: {end_time - start_time:.2f}s")
-        except Exception as e:
-            print(f"[ERROR] Manual clipping failed: {e}. Using full video instead.")
-            os.rename(full_video_path, final_video_path)
-    else:
-        print(f"[INFO] Video is short enough. No clipping needed.")
-        os.rename(full_video_path, final_video_path)
+    print(f"[SUCCESS] Video saved to {final_video_path}")
 
     return final_video_path
 
