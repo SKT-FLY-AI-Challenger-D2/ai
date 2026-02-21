@@ -88,14 +88,14 @@ async def analyze_video(request: AnalyzeRequest):
         print("Fetching transcript...")
         input_text = get_transcript(url, audio_path=audio_path)
         
-        print("Extracting random frames...")
-        frame_paths = extract_random_frames(video_path, num_frames=4)
+        # print("Extracting random frames...")
+        # frame_paths = extract_random_frames(video_path, num_frames=4)
         
         inputs = {
             "input_text": input_text,
             "video_path": video_path,
             "audio_path": audio_path,
-            "frame_paths": frame_paths
+            # "frame_paths": frame_paths
         }
         
         # 2. Run Graph
