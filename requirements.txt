@@ -20,3 +20,4 @@ pymupdf
 pytesseract
 Pillow
 pyhwp
+redis
