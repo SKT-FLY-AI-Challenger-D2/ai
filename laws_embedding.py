@@ -28,6 +28,7 @@ COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "legal_documents")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 
+
 DOMAIN_MAP = {
     "AI기본법": ["공통"],
     "금융소비자보호법": ["공통"],
@@ -36,18 +37,25 @@ DOMAIN_MAP = {
     "부정경쟁방지법": ["공통"],
     "식품표시광고법": ["식품"],
     "약사법": ["식품"],
-    "유사수신행위의 규제에 관한 법률": ["금융"],
+    "유사수신행위법": ["금융"],
     "의료기기법": ["의료"],
     "의료법": ["의료", "식품"],
-    "자본시장과 금융투자업에 관한 법률": ["금융"],
-    "정보통신망 이용촉진 및 정보보호 등에 관한 법률": ["공통"],
+    "자본시장법": ["금융"],
+    "정보통신망법": ["공통"],
     "중요한 표시·광고사항 고시": ["공통"],
     "표시광고법": ["공통"],
-    "표시ㆍ광고의 공정화에 관한 법률": ["공통"],
-    "형법 제347조": ["공통"],
+    "형법": ["공통"],
     "화장품 표시·광고 실증에 관한 규정": ["화장품"],
     "화장품법": ["화장품"],
+    "대법원 2011두82": ["금융"],
+    "대법원 2014도2727" : ["식품"],
+    "대법원 2015도6207" : ["식품"],
+    "대법원 2016도6329" : ["식품"],
+    "대법원 2010도3444" : ["식품"],
+    "서울북부지방법원 2024고단3283" : ["금융"],
+    "광주지방법원 2025고합32" : ["금융"],
 }
+
 
 def get_domain(source_name: str) -> list:
     for keyword, domain in DOMAIN_MAP.items():
@@ -80,14 +88,14 @@ def clean_text(text):
     text = re.sub(r'\d{4}-\d{2}-\d{2}\s+오후\s+\d+:\d+', '', text)
     return text.strip()
 
-def process_pdf(file_path):
+def process_pdf(file_path, doc_type=None):
     file_name = os.path.basename(file_path)
     source_name = os.path.splitext(file_name)[0]
     print(f"📖 읽는 중: {source_name}")
 
-    # [복구: 누락된 Domain 할당 로직 복원]
-    # 도메인 매핑 (파일 이름에 기반하여 도메인 부여)
-   
+    # [수정: 도메인 매핑]
+    # 파일명에서 '의료', '식품' 등 키워드를 찾아 매핑된 도메인(공통, 의료 등)을 가져옵니다.
+    # 폴더를 이동해도 파일명은 그대로이므로 DOMAIN_MAP은 정상 작동합니다.
     document_domain = ",".join(get_domain(source_name))
     
     loader = PyPDFLoader(file_path)
@@ -103,8 +111,21 @@ def process_pdf(file_path):
     article_matches = re.findall(r'(제\s?\d+\s?조\s?\([^)]+\))', full_text)
     is_precedent = re.search(r'주\s*문', full_text) and re.search(r'이\s*유', full_text)
 
-    if len(article_matches) > 5:
-        print("👉 [법률 모드]")
+    # [수정: 문서 타입 결정 로직]
+    # 1. doc_type이 인자로 전달된 경우(폴더 기반): 해당 타입을 우선 사용합니다.
+    # 2. 인자가 없는 경우(루트 폴더나 수동 실행): 텍스트 패턴을 분석하여 자동 판별합니다.
+    if not doc_type:
+        if len(article_matches) > 5:
+            doc_type = "law"
+        elif is_precedent:
+            doc_type = "precedent"
+        else:
+            doc_type = "general"
+
+    # 판별된 doc_type에 따라 서로 다른 청킹(분할) 전략을 적용합니다.
+    if doc_type == "law":
+        # 법률: '제N조'를 기준으로 나누어 조항의 맥락을 보존합니다.
+        print(f"👉 [법률 모드 - 폴더/자동 판별] - {source_name}")
         parts = re.split(r'(제\s?\d+\s?조\s?\([^)]+\))', full_text)
         splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
         for i in range(1, len(parts), 2):
@@ -116,8 +137,9 @@ def process_pdf(file_path):
                     page_content=f"[{source_name} {header}]\n{chunk}",
                     metadata={"source": source_name, "type": "law", "domain": document_domain}
                 ))
-    elif is_precedent:
-        print("👉 [판례 모드]")
+    elif doc_type == "precedent":
+        # 판례: 판결문 특화 키워드(살피건대 등)를 기준으로 흐름을 유지하며 나눕니다.
+        print(f"👉 [판례 모드 - 폴더/자동 판별] - {source_name}")
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000, chunk_overlap=300,
             separators=["\n\n", "살피건대", "이에 대하여", "."]
@@ -129,7 +151,8 @@ def process_pdf(file_path):
                 metadata={"source": source_name, "type": "precedent", "domain": document_domain}
             ))
     else:
-        print("👉 [일반 문서 모드]")
+        # 일반: 특별한 형식이 없는 경우 일정한 길이를 기준으로 나눕니다.
+        print(f"👉 [일반 문서 모드 - 폴더/자동 판별] - {source_name}")
         splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
         chunks = splitter.split_text(full_text)
         for chunk in chunks:
@@ -145,13 +168,22 @@ if __name__ == "__main__":
         print("❌ GOOGLE_API_KEY 없음")
         sys.exit(1)
 
-    pdf_files = glob.glob(os.path.join(LAW_FOLDER_PATH, "*.pdf"))
-    if not pdf_files:
-        print("❌ PDF 없음")
-        sys.exit(1)
-
     all_documents = []
-    for pdf in pdf_files:
+    
+    # [수정: 파일 수집 방식 변경]
+    # 1. law, precedent, general 하위 폴더를 우선적으로 탐색합니다.
+    # 폴더 이름을 통해 doc_type을 명시적으로 확정한 후 process_pdf로 전달합니다.
+    for folder in ["law", "precedent", "general"]:
+        folder_path = os.path.join(LAW_FOLDER_PATH, folder)
+        if os.path.isdir(folder_path):
+            pdf_files = glob.glob(os.path.join(folder_path, "*.pdf"))
+            for pdf in pdf_files:
+                all_documents.extend(process_pdf(pdf, doc_type=folder))
+    
+    # 2. 루트 폴더(./laws/)에 직접 놓인 파일들도 기존처럼 처리합니다(하위 호환성).
+    # 이 경우 doc_type=None으로 전달되어 자동 분석 로직이 작동합니다.
+    root_pdf_files = glob.glob(os.path.join(LAW_FOLDER_PATH, "*.pdf"))
+    for pdf in root_pdf_files:
         all_documents.extend(process_pdf(pdf))
 
     # [설명: Parent Document Retrieval (PDR) 원리 1단계 - 부모 문서 등록]
