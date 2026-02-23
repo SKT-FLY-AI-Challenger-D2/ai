@@ -74,33 +74,58 @@ def extract_cropped_face_frames(video_path, start_time, count=20):
     return image_parts
 
 # url 수정 필요 
+RUNPOD_URL = os.getenv(
+    "RUNPOD_URL",
+    "https://utkffbgubk59n7-8000.proxy.runpod.net/inference"
+)
+
+RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
 
 def invoke_custom_model(image_bytes: bytes) -> dict:
     """자체 Deepfake 탐지 모델(RunPod) 호출 (영어 프롬프트/응답)"""
-    DEFAULT_URL = "https://prw3dsex3tepfl-8000.proxy.runpod.net/inference"
-    # 사용자가 지정한 프롬프트 템플릿
     prompt = "<image>\nIs this image fake or real?\nASSISTANT:"
-    
+
     try:
-        img_b64 = base64.b64encode(image_bytes).decode('utf-8')
+        if not RUNPOD_API_KEY:
+            return {"status": "error", "message": "RUNPOD_API_KEY not set"}
+
+        img_b64 = base64.b64encode(image_bytes).decode("utf-8")
         payload = {
             "prompt": prompt,
             "image_base64": img_b64
         }
-        
-        # 외부 API 호출
-        print(f"[Detector] 자체 모델 호출 시도: {DEFAULT_URL}")
-        response = requests.post(DEFAULT_URL, json=payload, timeout=10)
+
+        headers = {
+            "x-api-key": RUNPOD_API_KEY,
+            "Content-Type": "application/json"
+        }
+
+        print(f"[Detector] 자체 모델 호출 시도: {RUNPOD_URL}")
+
+        response = requests.post(
+            RUNPOD_URL,
+            json=payload,
+            headers=headers,
+            timeout=15
+        )
+
         if response.status_code == 200:
-            # 서버 응답에서 'result' 필드 사용
             res_content = response.json().get("result", "").lower()
-            # "fake" 포함 여부 확인
             is_fake = "fake" in res_content
             print(f"[Detector] 자체 모델 응답 수신 성공: {res_content}")
-            return {"status": "success", "is_fake": is_fake, "raw": res_content}
+            return {
+                "status": "success",
+                "is_fake": is_fake,
+                "raw": res_content
+            }
         else:
             print(f"[Detector] 자체 모델 호출 실패 (Status: {response.status_code})")
-            return {"status": "error", "message": f"API Error: {response.status_code}"}
+            return {
+                "status": "error",
+                "message": f"API Error: {response.status_code}",
+                "detail": response.text
+            }
+
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -153,6 +178,7 @@ def detector_node(state: ModerationState) -> dict:
             1. 반드시 아래 JSON 형식으로만 응답하라.
             2. 'evidence'에는 판정을 뒷받침하는 구체적인 물리적 결함 2가지를 기술하라.
             3. 'score'는 0.5(의심) ~ 1.0(확신) 사이로 책정하라. (1.0에 가까울수록 확실한 가짜임)
+            4. 특정 프레임을 언급하지는 말 것. 
 
             {
             "score": (0.5~1.0),
@@ -179,6 +205,7 @@ def detector_node(state: ModerationState) -> dict:
             1. 반드시 아래 JSON 형식으로만 응답하라.
             2. 'evidence'에는 외형적 특징이 아닌 '물리적/동적 불일치' 관점의 증거 2가지를 기술하라.
             3. 'score'는 0.0(완전 실제) ~ 1.0(완전 가짜) 사이로 책정하라. (1.0에 가까울수록 딥페이크일 확률이 높음)
+            4. 특정 프레임을 언급하지는 말 것. 
 
             {
             "score": (0.0~1.0),
