@@ -24,6 +24,7 @@ def download_video(url, output_dir="downloads", clip_duration=60):
 
     # 2️⃣ 옵션 설정
     ydl_opts = {
+        'cookiefile': 'youtube_cookies.txt',
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': os.path.join(output_dir, '%(id)s.%(ext)s'),
         'noplaylist': True,
