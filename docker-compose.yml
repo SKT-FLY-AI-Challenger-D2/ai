@@ -1,0 +1,22 @@
+services:
+  db:
+    image: mysql:8.0.36
+    restart: always
+    environment:
+      # 초기 루트 비밀번호와 DB 이름을 설정
+      MYSQL_ROOT_PASSWORD: "4321"
+      MYSQL_DATABASE: "skt_fly_ai_final_project"
+    ports:
+      - "3306:3306"
+    volumes:
+      # 내 컴퓨터의 ./data/mysql 폴더와 컨테이너 내부를 연결 (데이터 보존)
+      - ./data/mysql:/var/lib/mysql
+
+  chromadb:
+    image: chromadb/chroma:0.5.20
+    restart: always
+    ports:
+      - "8002:8000" # 백엔드와 겹치지 않게 8002로 설정
+    volumes:
+      # 내 컴퓨터의 ./data/chroma 폴더와 컨테이너 내부를 연결
+      - ./data/chroma:/chroma/chroma

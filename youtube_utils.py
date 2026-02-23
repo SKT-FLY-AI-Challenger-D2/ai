@@ -2,26 +2,60 @@ import os
 import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
+from moviepy import VideoFileClip
+from google import genai
+import time
 
-def download_video(url, output_dir="downloads"):
+def download_video(url, output_dir="downloads", clip_duration=60):
     """
-    Downloads video from YouTube URL to the specified directory.
-    Returns the path to the downloaded video file.
+    If video duration >= clip_duration:
+        download middle clip_duration seconds
+    Else:
+        download full original video
+    Returns path to downloaded video
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-        
+
+    # 1️⃣ 먼저 길이만 가져오기 (다운로드 X)
+    with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+        duration = info.get("duration", 0)
+
+    # 2️⃣ 옵션 설정
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': os.path.join(output_dir, '%(id)s.%(ext)s'),
         'noplaylist': True,
+        'merge_output_format': 'mp4',
+        'quiet': True,
     }
-    
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info_dict = ydl.extract_info(url, download=True)
-        video_path = ydl.prepare_filename(info_dict)
+
+    # 3️⃣ 자르기 필요 시 범위 설정 (YT-DLP Native Clipping)
+    if duration > clip_duration:
+        half = clip_duration / 2
+        start_time = max(0, duration / 2 - half)
+        end_time = min(duration, duration / 2 + half)
+        print(f"[INFO] Clipping middle {clip_duration}s of video ({start_time}s ~ {end_time}s)...")
         
-    return video_path
+        ydl_opts['download_ranges'] = lambda info, ctx: [{
+            'start_time': start_time,
+            'end_time': end_time,
+            'title': 'section',
+        }]
+        ydl_opts['force_keyframes_at_cuts'] = True
+    else:
+        print(f"[INFO] Video is short ({duration}s). No clipping needed.")
+
+    # 4️⃣ 실제 다운로드
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        final_video_path = ydl.prepare_filename(info)
+
+    print(f"[SUCCESS] Video saved to {final_video_path}")
+
+    return final_video_path
+
 
 def extract_audio(video_path, output_dir="downloads"):
     """
@@ -37,8 +71,6 @@ def extract_audio(video_path, output_dir="downloads"):
     
     # Use ffmpeg via os.system or specialized lib. 
     # moviepy is installed, let's use it for simplicity/cross-platform.
-    from moviepy import VideoFileClip
-    
     try:
         video_clip = VideoFileClip(video_path)
         video_clip.audio.write_audiofile(audio_path)
@@ -48,8 +80,7 @@ def extract_audio(video_path, output_dir="downloads"):
         print(f"Error extracting audio with moviepy: {e}")
         return None
 
-import google.generativeai as genai
-import time
+
 
 def transcribe_with_gemini(audio_path):
     """
@@ -63,24 +94,28 @@ def transcribe_with_gemini(audio_path):
          return "No transcript available (Missing API Key)."
 
     try:
-        genai.configure(api_key=api_key)
+        client = genai.Client(api_key=api_key)
         
         # Upload file
-        audio_file = genai.upload_file(path=audio_path)
+        audio_file = client.files.upload(file=audio_path)
         
         # Wait for processing
         while audio_file.state.name == "PROCESSING":
             time.sleep(1)
-            audio_file = genai.get_file(audio_file.name)
+            audio_file = client.files.get(name=audio_file.name)
 
-        if audio_file.state.name == "FAILED":
-             raise ValueError(f"Audio processing failed: {audio_file.state.name}")
-        
-        model = genai.GenerativeModel(model_name="gemini-3-flash-preview")
+        if audio_file.state.name != "ACTIVE":
+             raise ValueError(f"Audio processing failed with state: {audio_file.state.name}")
         
         prompt = "Generate a verbatim transcript of this audio file. Do not include timestamps or speaker labels unless necessary for clarity. Just return the text."
-        response = model.generate_content([audio_file, prompt])
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[audio_file, prompt]
+        )
         
+        if not response or not response.text:
+             return "No transcript generated (Empty Response)."
+
         return response.text.strip()
         
     except Exception as e:
@@ -95,18 +130,32 @@ def get_transcript(url, audio_path=None):
     """
     try:
         # Extract video ID
-        if "v=" in url:
-            video_id = url.split("v=")[1].split("&")[0]
-        elif "youtu.be/" in url:
-            video_id = url.split("youtu.be/")[1].split("?")[0]
-        elif "shorts/" in url:
-            video_id = url.split("shorts/")[1].split("?")[0]
+        from urllib.parse import urlparse, parse_qs
+        parsed_url = urlparse(url)
+        if parsed_url.hostname == 'youtu.be':
+            video_id = parsed_url.path[1:]
+        elif parsed_url.hostname in ('www.youtube.com', 'youtube.com'):
+            if parsed_url.path == '/watch':
+                video_id = parse_qs(parsed_url.query)['v'][0]
+            elif parsed_url.path[:7] == '/embed/':
+                video_id = parsed_url.path[7:]
+            elif parsed_url.path[:3] == '/v/':
+                video_id = parsed_url.path[3:]
+            elif '/shorts/' in parsed_url.path:
+                video_id = parsed_url.path.split('/shorts/')[1].split('/')[0]
+            else:
+                video_id = None
         else:
-            return ""
+            video_id = None
+
+        if not video_id:
+             print("Could not extract video ID from URL.")
+             raise ValueError("Invalid YouTube URL")
             
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        print(f"[INFO] Fetching transcript for video ID: {video_id}")
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ko', 'en'])
         formatter = TextFormatter()
-        return formatter.format_transcript(transcript)
+        return formatter.format_transcript(transcript_list)
     except Exception as e:
         print(f"Error fetching transcript from YouTube: {e}")
         
@@ -115,3 +164,5 @@ def get_transcript(url, audio_path=None):
             return transcribe_with_gemini(audio_path)
             
         return "No transcript available."
+
+# 추후에 다운로드 다 받고 지우도록 수정해야함. 

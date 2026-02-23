@@ -5,6 +5,8 @@ import time
 from urllib.parse import urlparse
 from schemas import ModerationState, VoiceResult
 
+# 현재 사용하지 않음! 
+
 def voice_detector_node(state: ModerationState) -> dict:
     """
     Analyzes audio for AI-generated voice using undetectable.ai API.

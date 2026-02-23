@@ -6,3 +6,17 @@ python-dotenv
 yt-dlp
 youtube-transcript-api
 moviepy
+pypdf 
+langchain-community
+langchain-google-genai
+chromadb
+fastapi
+uvicorn
+langchain-chroma
+opencv-python
+aiohttp
+beautifulsoup4
+pymupdf
+pytesseract
+Pillow
+pyhwp
