@@ -23,7 +23,8 @@ def reporter_node(state: ModerationState) -> dict:
         deepfake.deepfake_ai_score if deepfake else 0.0,
         fact.fake_score if fact else 0.0
     ]
-    final_score = (sum(scores) - min(scores)) / 2 if scores else 0.0
+    
+    final_score = min(0.5*scores[0]+0.3*scores[1]+0.3*scores[2],1)
     
     # Prepare data for LLM
     analysis_data = {
