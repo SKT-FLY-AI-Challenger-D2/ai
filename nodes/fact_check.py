@@ -15,6 +15,9 @@ import pytesseract
 from PIL import Image
 import re
 import time
+from google.genai.errors import APIError
+
+from config import settings
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from schemas import ModerationState, FactResult
@@ -131,34 +134,40 @@ def analyze_script(state: ModerationState) -> ModerationState:
   ]
 }
 """
+    for model_name in settings.MODELS:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=f"{system_prompt}\n\n텍스트:\n{state.input_text}",
+                config={"response_mime_type": "application/json"}
+            )
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=f"{system_prompt}\n\n텍스트:\n{state.input_text}",
-            config={"response_mime_type": "application/json"}
-        )
+            raw_json_text = response.text.strip()
+            analysis_data = json.loads(raw_json_text)
 
-        raw_json_text = response.text.strip()
-        analysis_data = json.loads(raw_json_text)
+            # ✅ (추가) 모델이 규칙을 안 지킬 때를 대비해 강제 컷
+            claims = analysis_data.get("claims", []) or []
+            analysis_data["claims"] = claims[:K_CLAIMS]
+            analysis_data["total_claims_count"] = len(analysis_data["claims"])
 
-        # ✅ (추가) 모델이 규칙을 안 지킬 때를 대비해 강제 컷
-        claims = analysis_data.get("claims", []) or []
-        analysis_data["claims"] = claims[:K_CLAIMS]
-        analysis_data["total_claims_count"] = len(analysis_data["claims"])
+            evidence_packet = [f"MAIN_DOMAIN: {analysis_data.get('main_domain')}"]
+            for claim in analysis_data.get("claims", []):
+                evidence_packet.append(json.dumps(claim, ensure_ascii=False))
 
-        evidence_packet = [f"MAIN_DOMAIN: {analysis_data.get('main_domain')}"]
-        for claim in analysis_data.get("claims", []):
-            evidence_packet.append(json.dumps(claim, ensure_ascii=False))
+            state.fact = FactResult(
+                fake_score=0.0,
+                fake_evidence=evidence_packet
+            )
 
-        state.fact = FactResult(
-            fake_score=0.0,
-            fake_evidence=evidence_packet
-        )
+            return state
 
-    except Exception as e:
-        print(f"[!] Analysis Error: {e}")
-        state.fact = FactResult(fake_score=0.0, fake_evidence=[f"Error: {str(e)}"])
+        except APIError as e:
+            print(f"{model_name} API 에러(트래픽 등): {e}. 다음 모델 시도.")
+            continue
+
+
+    print(f"[!] Analysis Error: {e}")
+    state.fact = FactResult(fake_score=0.0, fake_evidence=[f"Error: {str(e)}"])
     
     return state
 

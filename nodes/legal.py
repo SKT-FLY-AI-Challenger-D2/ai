@@ -12,6 +12,9 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from google.genai.errors import APIError
+
+from config import settings
 
 
 
@@ -63,11 +66,11 @@ except Exception as e:
 
 # 3. LLM 설정 (Gemini 2.0 Flash)
 # 모델명은 사용 가능한 최신 버전으로 확인 필요
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash", # gemini-2.5-flash가 아직 출시 전일 수 있으므로 2.0 권장
-    temperature=0, 
-    google_api_key=api_key
-)
+# llm = ChatGoogleGenerativeAI(
+#     model="gemini-2.5-flash", # gemini-2.5-flash가 아직 출시 전일 수 있으므로 2.0 권장
+#     temperature=0, 
+#     google_api_key=api_key
+# )
 
 # 4. 통합 프롬프트 정의 (동일 유지)
 
@@ -194,10 +197,10 @@ analysis_template = """
 """
 
 analysis_prompt = ChatPromptTemplate.from_template(analysis_template)
-final_chain = analysis_prompt | llm | StrOutputParser()
+# final_chain = analysis_prompt | llm | StrOutputParser()
 
 # 분야 분류용
-def classify_domain(script: str, llm) -> str:
+def classify_domain(script: str) -> str:
     prompt = f"""
     다음 스크립트가 어느 분야의 광고인지 아래 중 하나로만 답하세요.
     [식품, 화장품, 의료, 금융, 공통]
@@ -205,10 +208,20 @@ def classify_domain(script: str, llm) -> str:
     스크립트: {script[:500]}
     
     분야:"""
-    result = llm.invoke(prompt).content.strip()
-    for domain in ["식품", "화장품", "의료", "금융"]:
-        if domain in result:
-            return domain
+    for model_name in settings.MODELS:
+        try:
+            llm = ChatGoogleGenerativeAI(
+                model=model_name
+                temperature=0, 
+                google_api_key=api_key
+            )
+            result = llm.invoke(prompt).content.strip()
+            for domain in ["식품", "화장품", "의료", "금융"]:
+                if domain in result:
+                    return domain
+        except APIError as e:
+                print(f"{model_name} API 에러(트래픽 등): {e}. 다음 모델 시도.")
+                continue
     return "공통"
 
 
@@ -231,7 +244,7 @@ def legal_node(state: ModerationState) -> ModerationState:
     print(f"🔍 법률 데이터베이스 검색 및 매칭 중...")
     try:
 
-        domain = classify_domain(script, llm)
+        domain = classify_domain(script)
         print(f"🏷️ 분류된 분야: {domain}")
 
         all_retriever = vector_db.as_retriever(search_kwargs={"k": 20})
@@ -256,38 +269,48 @@ def legal_node(state: ModerationState) -> ModerationState:
 
     # (이하 분석 리포트 생성 및 JSON 파싱 로직 동일)
     print("📝 법적 타당성 검토 및 보고서 작성 중...")
-    try:
-        full_report = final_chain.invoke({
-            "context": context_text[:8000], 
-            "script": script[:12000],
-            "domain": domain
-        })
+    for model_name in settings.MODELS:
+        try:
+            llm = ChatGoogleGenerativeAI(
+                model=model_name
+                temperature=0, 
+                google_api_key=api_key
+            )
+            final_chain = analysis_prompt | llm | StrOutputParser()
+            full_report = final_chain.invoke({
+                "context": context_text[:8000], 
+                "script": script[:12000],
+                "domain": domain
+            })
 
-        json_str_match = re.search(r'```json\s*(.*?)\s*```', full_report, re.DOTALL)
-        
-        if json_str_match:
-            try:
-                json_data = json.loads(json_str_match.group(1).strip())
-                evidence = json_data.get("legal_issue_evidence", [])
+            json_str_match = re.search(r'```json\s*(.*?)\s*```', full_report, re.DOTALL)
+            
+            if json_str_match:
+                try:
+                    json_data = json.loads(json_str_match.group(1).strip())
+                    evidence = json_data.get("legal_issue_evidence", [])
 
-                state.legal = LegalResult(
-                    legal_issue_score=float(json_data.get("legal_issue_score", 0.0)),
-                    legal_issue_evidence=evidence if isinstance(evidence, list) else [str(evidence)],
-                )
-                
-                print("\n⚖️ [AI 최종 판단 리포트]")
-                print(f"  - 법적 리스크 점수: {state.legal.legal_issue_score}")
-                print(f"  - 핵심 근거: {state.legal.legal_issue_evidence}")
-                print("--------------------------\n")
-                
-            except Exception as json_e:
-                print(f"⚠️ JSON 데이터 매핑 실패: {json_e}")
-        else:
-            print("⚠️ 보고서 내에서 JSON 지표를 찾지 못했습니다.")
+                    state.legal = LegalResult(
+                        legal_issue_score=float(json_data.get("legal_issue_score", 0.0)),
+                        legal_issue_evidence=evidence if isinstance(evidence, list) else [str(evidence)],
+                    )
+                    
+                    print("\n⚖️ [AI 최종 판단 리포트]")
+                    print(f"  - 법적 리스크 점수: {state.legal.legal_issue_score}")
+                    print(f"  - 핵심 근거: {state.legal.legal_issue_evidence}")
+                    print("--------------------------\n")
+                    
+                except Exception as json_e:
+                    print(f"⚠️ JSON 데이터 매핑 실패: {json_e}")
+            else:
+                print("⚠️ 보고서 내에서 JSON 지표를 찾지 못했습니다.")
 
-        state.report = full_report 
+            state.report = full_report 
+        except APIError as e:
+            print(f"{model_name} API 에러(트래픽 등): {e}. 다음 모델 시도.")
+            continue
 
-    except Exception as e:
-        print(f"❌ 분석 단계 오류 발생: {e}")
+        except Exception as e:
+            print(f"❌ 분석 단계 오류 발생: {e}")
 
     return {"legal": state.legal}

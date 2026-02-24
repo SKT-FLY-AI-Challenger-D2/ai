@@ -8,6 +8,9 @@ import time
 from google import genai
 from google.genai import types
 from schemas import ModerationState, DeepfakeResult
+from google.genai.errors import APIError
+
+from config import settings
 
 # 1. 얼굴 인식기 초기화 (OpenCV 기본 모델 사용)
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -214,32 +217,37 @@ def detector_node(state: ModerationState) -> dict:
             """
 
         # Gemini 호출
-        print(f"[Detector] Gemini 호출 시도 (Model: {client.models.get_model('gemini-3-flash-preview').name if hasattr(client.models, 'get_model') else 'gemini-3-flash-preview'})")
-        response = client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=face_frames + [prompt],
-            config=types.GenerateContentConfig(temperature=0.1, top_p=0.85)
-        )
-        print("[Detector] Gemini 응답 수신 성공")
-        print("Gemini Response: ", response.text)
+        for model_name in settings.MODELS:
+            print(f"[Detector] Gemini 호출 시도 (Model: {client.models.get_model('gemini-3-flash-preview').name if hasattr(client.models, 'get_model') else 'gemini-3-flash-preview'})")
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=face_frames + [prompt],
+                    config=types.GenerateContentConfig(temperature=0.1, top_p=0.85)
+                )
+                print("[Detector] Gemini 응답 수신 성공")
+                print("Gemini Response: ", response.text)
 
-        # 4. 결과 파싱
-        res_text = response.text.strip()
-        if "```json" in res_text:
-            res_text = res_text.split("```json")[1].split("```")[0].strip()
-        elif "{" in res_text:
-            res_text = "{" + res_text.split("{", 1)[1].rsplit("}", 1)[0] + "}"
-        
-        data = json.loads(res_text)
-        
-        result = DeepfakeResult(
-            deepfake_ai_score=float(data.get("score", 0.0)),
-            deepfake_ai_evidence=data.get("evidence", [])[:2]
-        )
+                # 4. 결과 파싱
+                res_text = response.text.strip()
+                if "```json" in res_text:
+                    res_text = res_text.split("```json")[1].split("```")[0].strip()
+                elif "{" in res_text:
+                    res_text = "{" + res_text.split("{", 1)[1].rsplit("}", 1)[0] + "}"
+                
+                data = json.loads(res_text)
+                
+                result = DeepfakeResult(
+                    deepfake_ai_score=float(data.get("score", 0.0)),
+                    deepfake_ai_evidence=data.get("evidence", [])[:2]
+                )
 
-        end_time_str = time.strftime("%H:%M:%S")
-        print(f"--- [Detector Node] 종료 시각: {end_time_str} ---")
-        return {"deepfake": result}
+                end_time_str = time.strftime("%H:%M:%S")
+                print(f"--- [Detector Node] 종료 시각: {end_time_str} ---")
+                return {"deepfake": result}
+            except APIError as e:
+                print(f"{model_name} API 에러(트래픽 등): {e}. 다음 모델 시도.")
+                continue
 
     except Exception as e:
         print(f"Error in detector_node: {e}")
