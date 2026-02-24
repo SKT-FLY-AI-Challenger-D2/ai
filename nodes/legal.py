@@ -211,7 +211,7 @@ def classify_domain(script: str) -> str:
     for model_name in settings.MODELS:
         try:
             llm = ChatGoogleGenerativeAI(
-                model=model_name
+                model=model_name,
                 temperature=0, 
                 google_api_key=api_key
             )
@@ -272,7 +272,7 @@ def legal_node(state: ModerationState) -> ModerationState:
     for model_name in settings.MODELS:
         try:
             llm = ChatGoogleGenerativeAI(
-                model=model_name
+                model=model_name, 
                 temperature=0, 
                 google_api_key=api_key
             )
@@ -306,6 +306,7 @@ def legal_node(state: ModerationState) -> ModerationState:
                 print("⚠️ 보고서 내에서 JSON 지표를 찾지 못했습니다.")
 
             state.report = full_report 
+            break
         except APIError as e:
             print(f"{model_name} API 에러(트래픽 등): {e}. 다음 모델 시도.")
             continue

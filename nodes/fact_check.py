@@ -166,8 +166,8 @@ def analyze_script(state: ModerationState) -> ModerationState:
             continue
 
 
-    print(f"[!] Analysis Error: {e}")
-    state.fact = FactResult(fake_score=0.0, fake_evidence=[f"Error: {str(e)}"])
+    print(f"[!] Analysis Error")
+    state.fact = FactResult(fake_score=0.0, fake_evidence=[f"Error: 모델 호출 실패"])
     
     return state
 

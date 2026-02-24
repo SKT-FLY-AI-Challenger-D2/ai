@@ -218,7 +218,7 @@ def detector_node(state: ModerationState) -> dict:
 
         # Gemini 호출
         for model_name in settings.MODELS:
-            print(f"[Detector] Gemini 호출 시도 (Model: {client.models.get_model('gemini-3-flash-preview').name if hasattr(client.models, 'get_model') else 'gemini-3-flash-preview'})")
+            print(f"[Detector] Gemini 호출 시도 (Model: {model_name})")
             try:
                 response = client.models.generate_content(
                     model=model_name,
@@ -248,6 +248,8 @@ def detector_node(state: ModerationState) -> dict:
             except APIError as e:
                 print(f"{model_name} API 에러(트래픽 등): {e}. 다음 모델 시도.")
                 continue
+        print(f"Error in detector_node: {e}")
+        return {"deepfake": DeepfakeResult(deepfake_ai_score=0.0, deepfake_ai_evidence=[f"에러: {str(e)}"])}
 
     except Exception as e:
         print(f"Error in detector_node: {e}")
