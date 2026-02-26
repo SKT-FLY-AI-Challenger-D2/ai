@@ -1,4 +1,5 @@
 import os
+os.environ.pop('NODE_CHANNEL_FD', None)  # ← 추가
 import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
@@ -16,20 +17,30 @@ def download_video(url, output_dir="downloads", clip_duration=60):
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-
+    end_time_str = time.strftime("%H:%M:%S")
+    print("[Youtube Util] 길이 추출 시작", end_time_str)
     # 1️⃣ 먼저 길이만 가져오기 (다운로드 X)
-    with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+    with yt_dlp.YoutubeDL({
+        'quiet': True,
+        'cookiefile': '/home/ljj/RealyAI/ai/youtube_cookies.txt',
+        # 'runtime':{'js_runtimes': ['node:/usr/bin/node']},
+        # 'remote_components': ['ejs:github'],
+        'extractor_args': {'youtube': {'player_client': ['web'], 'po_token': ['web.gvs+MlJgJzx9dvhahWAcdQLo6XNWrtdluuNR-MBy7H6vEGOaloAs240Hs1FxPoq6-W-vXwr2n43UHPsA8wPI2Vt8cCH1qW71w0f303UeT-DBU8qBnYjc']}},
+        }) as ydl:
         info = ydl.extract_info(url, download=False)
         duration = info.get("duration", 0)
-
-    # 2️⃣ 옵션 설정
+    end_time_str = time.strftime("%H:%M:%S")
+    print("[Youtube Util] 영상 다운로드 시작", end_time_str)
     ydl_opts = {
-        'cookiefile': 'youtube_cookies.txt',
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': os.path.join(output_dir, '%(id)s.%(ext)s'),
         'noplaylist': True,
         'merge_output_format': 'mp4',
         'quiet': True,
+        'cookiefile': '/home/ljj/RealyAI/ai/youtube_cookies.txt',
+        # 'runtime':{'js_runtimes': ['node:/usr/bin/node']},
+        # 'remote_components': ['ejs:github'],
+        'extractor_args': {'youtube': {'player_client': ['web'], 'po_token': ['web.gvs+MlJgJzx9dvhahWAcdQLo6XNWrtdluuNR-MBy7H6vEGOaloAs240Hs1FxPoq6-W-vXwr2n43UHPsA8wPI2Vt8cCH1qW71w0f303UeT-DBU8qBnYjc']}},
     }
 
     # 3️⃣ 자르기 필요 시 범위 설정 (YT-DLP Native Clipping)
@@ -52,8 +63,8 @@ def download_video(url, output_dir="downloads", clip_duration=60):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         final_video_path = ydl.prepare_filename(info)
-
-    print(f"[SUCCESS] Video saved to {final_video_path}")
+    end_time_str = time.strftime("%H:%M:%S")
+    print(f"[SUCCESS] Video saved to {final_video_path} : {end_time_str}")
 
     return final_video_path
 

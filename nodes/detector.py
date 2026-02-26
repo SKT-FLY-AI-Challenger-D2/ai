@@ -217,7 +217,7 @@ def detector_node(state: ModerationState) -> dict:
             """
 
         # Gemini 호출
-        for model_name in settings.MODELS:
+        for model_name in ['gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-3-pro-preview']:
             print(f"[Detector] Gemini 호출 시도 (Model: {model_name})")
             try:
                 response = client.models.generate_content(

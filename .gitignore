@@ -4,6 +4,8 @@ graph.ipynb
 verify_graph.py
 voice_detector_test.py
 .venv/
+venv/
+venv/*
 chroma_db_local/
 downloads/
 test/*
@@ -11,4 +13,6 @@ samples/*
 downloads/*
 data/
 test_reporter.py
-test_ad_graph.py 
+test_ad_graph.py
+venv/
+venv/* 
