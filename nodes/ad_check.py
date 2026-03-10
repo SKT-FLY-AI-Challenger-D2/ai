@@ -48,7 +48,7 @@ def ad_check_node(state: ModerationState) -> dict:
     스크립트:
     {state.input_text[:5000]}
     """
-    for model_name in settings.MODELS:
+    for model_name in ['gemini-3-pro-preview', 'gemini-2.5-flash']:
         try:
             response = client.models.generate_content(
                 model=model_name,
