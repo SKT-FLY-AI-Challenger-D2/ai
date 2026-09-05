@@ -76,11 +76,9 @@ def extract_cropped_face_frames(video_path, start_time, count=20):
     video.release()
     return image_parts
 
-# url 수정 필요 
-RUNPOD_URL = os.getenv(
-    "RUNPOD_URL",
-    "https://utkffbgubk59n7-8000.proxy.runpod.net/inference"
-)
+# TASK-06: 서비스 종료로 더 이상 존재하지 않는 RunPod 엔드포인트를 기본값으로
+# 두지 않는다. 설정이 없으면 자체 모델 분기를 건너뛰고 Gemini 판정만 사용한다.
+RUNPOD_URL = os.getenv("RUNPOD_URL", "")
 
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
 
@@ -89,8 +87,8 @@ def invoke_custom_model(image_bytes: bytes) -> dict:
     prompt = "<image>\nIs this image fake or real?\nASSISTANT:"
 
     try:
-        if not RUNPOD_API_KEY:
-            return {"status": "error", "message": "RUNPOD_API_KEY not set"}
+        if not RUNPOD_API_KEY or not RUNPOD_URL:
+            return {"status": "error", "message": "RUNPOD_URL/RUNPOD_API_KEY not set"}
 
         img_b64 = base64.b64encode(image_bytes).decode("utf-8")
         payload = {

@@ -30,38 +30,53 @@ from schemas import ModerationState, LegalResult
 load_dotenv()
 api_key = os.getenv("GOOGLE_API_KEY")
 
-if not api_key:
-    print("❌ 오류: GOOGLE_API_KEY가 없습니다. .env 파일을 확인하세요.")
-    sys.exit(1)
-
-# 1. 임베딩 모델 로드
-print("⚙️ 법률 DB 및 임베딩 모델 로드 중...")
-embeddings = GoogleGenerativeAIEmbeddings(
-     model="models/gemini-embedding-001",
-     google_api_key=api_key 
-)
-
 # Docker ChromaDB 서버 설정
 CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", 8002))  # 포트는 숫자로 변환 필요
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "legal_documents")
 
-try:
-    # 2. Docker 서버 연결을 위한 HttpClient 생성
-    http_client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
-    
-    # 3. LangChain용 Chroma 객체 연결 (client 파라미터 사용)
-    vector_db = Chroma(
-        client=http_client,
-        collection_name=COLLECTION_NAME,
-        embedding_function=embeddings
-    )
-    print(f"✅ Docker ChromaDB 연결 성공 (Port: {CHROMA_PORT})")
+# TASK-06: import 시점에 API 키·Chroma 연결을 강제하면 외부 자원이 준비되기 전에는
+# 프로세스 자체가 뜨지 못한다(sys.exit). 대신 최초 실제 사용 시점에 지연 초기화하고,
+# 실패하면 그 시점에만 예외를 던진다. 성공한 뒤에만 전역에 채우므로 실패 후 재시도가
+# 가능하다(재시작 없이 ChromaDB가 복구되면 다음 요청에서 다시 연결을 시도한다).
+_embeddings = None
+_vector_db = None
 
-except Exception as e:
-    print(f"❌ 오류: ChromaDB 서버(Port: {CHROMA_PORT})에 연결할 수 없습니다.")
-    print(f"   Docker가 실행 중인지 확인하세요. 에러내용: {e}")
-    sys.exit(1)
+
+def _ensure_initialized():
+    global _embeddings, _vector_db
+
+    if _vector_db is not None:
+        return _embeddings, _vector_db
+
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY가 없습니다. .env 파일을 확인하세요.")
+
+    embeddings = GoogleGenerativeAIEmbeddings(
+        model="models/gemini-embedding-001",
+        google_api_key=api_key
+    )
+
+    try:
+        http_client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
+        http_client.heartbeat()  # 실제로 연결 가능한지 확인
+        vector_db = Chroma(
+            client=http_client,
+            collection_name=COLLECTION_NAME,
+            embedding_function=embeddings
+        )
+    except Exception as e:
+        raise RuntimeError(
+            f"ChromaDB 서버(Port: {CHROMA_PORT})에 연결할 수 없습니다: {e}"
+        ) from e
+
+    _embeddings, _vector_db = embeddings, vector_db
+    return _embeddings, _vector_db
+
+
+def check_ready() -> None:
+    """/ready 엔드포인트에서 호출한다. 실패 시 예외를 던진다."""
+    _ensure_initialized()
 
 
 # 3. LLM 설정 (Gemini 2.0 Flash)
@@ -247,6 +262,7 @@ def legal_node(state: ModerationState) -> ModerationState:
         domain = classify_domain(script)
         print(f"🏷️ 분류된 분야: {domain}")
 
+        _, vector_db = _ensure_initialized()
         all_retriever = vector_db.as_retriever(search_kwargs={"k": 20})
         all_docs = all_retriever.invoke(script[:1500])
 

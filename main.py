@@ -12,11 +12,33 @@ from youtube_utils import download_video, extract_audio, get_transcript
 # Import graph
 from graph import app as graph_app
 from schemas import FactResult, DeepfakeResult, LegalResult
+# TASK-06: 준비 상태 확인용 (Chroma·GOOGLE_API_KEY 지연 초기화)
+from nodes.legal import check_ready
 
 # Load environment variables
 load_dotenv()
 
 app = FastAPI(title="AI Moderation API", version="2.0")
+
+
+@app.get("/health")
+def health_check():
+    """프로세스가 요청을 받을 수 있는지만 확인한다. 외부 자원 상태는 보지 않는다."""
+    return {"status": "ok"}
+
+
+@app.get("/ready")
+def readiness_check():
+    """필수 설정(GOOGLE_API_KEY)과 ChromaDB 연결을 실제로 확인한다 (TASK-06).
+
+    실패해도 프로세스는 유지되며, 원인이 해소되면 재시작 없이 다음 호출에서
+    다시 성공할 수 있다(legal.py의 지연 초기화가 실패 상태를 캐시하지 않음).
+    """
+    try:
+        check_ready()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {"status": "ready"}
 
 class AnalyzeRequest(BaseModel):
     youtube_url: str
