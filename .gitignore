@@ -15,4 +15,13 @@ data/
 test_reporter.py
 test_ad_graph.py
 venv/
-venv/* 
+venv/*
+
+# 비밀·개인 정보 (TASK-02)
+info.txt
+youtube_cookies*.txt
+.idea/
+
+# 실행 결과·생성 데이터 (TASK-02)
+nodes/result.txt
+my_db_path/
