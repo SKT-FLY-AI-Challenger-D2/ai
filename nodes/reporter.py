@@ -24,7 +24,7 @@ def reporter_node(state: ModerationState) -> dict:
         fact.fake_score if fact else 0.0
     ]
     
-    final_score = min(0.5*scores[0]+0.3*scores[1]+0.3*scores[2],1)
+    final_score = min(0.4*scores[0]+0.2*scores[1]+0.3*scores[2],1)
     
     # Prepare data for LLM
     analysis_data = {
