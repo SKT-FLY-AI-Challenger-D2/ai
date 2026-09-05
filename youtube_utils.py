@@ -7,6 +7,17 @@ from moviepy import VideoFileClip
 from google import genai
 import time
 
+from config import settings
+
+
+def _youtube_extractor_args() -> dict:
+    """TASK-07: PO 토큰은 선택값이다. 없으면 공개 영상 경로만 쓰도록
+    player_client만 지정하고 po_token 옵션 자체를 넣지 않는다."""
+    args = {"player_client": ["web"]}
+    if settings.YOUTUBE_PO_TOKEN:
+        args["po_token"] = [settings.YOUTUBE_PO_TOKEN]
+    return {"youtube": args}
+
 def download_video(url, output_dir="downloads", clip_duration=60):
     """
     If video duration >= clip_duration:
@@ -22,10 +33,10 @@ def download_video(url, output_dir="downloads", clip_duration=60):
     # 1️⃣ 먼저 길이만 가져오기 (다운로드 X)
     with yt_dlp.YoutubeDL({
         'quiet': True,
-        'cookiefile': '/home/ljj/RealyAI/ai/youtube_cookies.txt',
+        'cookiefile': settings.YOUTUBE_COOKIE_PATH,
         # 'runtime':{'js_runtimes': ['node:/usr/bin/node']},
         # 'remote_components': ['ejs:github'],
-        'extractor_args': {'youtube': {'player_client': ['web'], 'po_token': ['web.gvs+MlJgJzx9dvhahWAcdQLo6XNWrtdluuNR-MBy7H6vEGOaloAs240Hs1FxPoq6-W-vXwr2n43UHPsA8wPI2Vt8cCH1qW71w0f303UeT-DBU8qBnYjc']}},
+        'extractor_args': _youtube_extractor_args(),
         }) as ydl:
         info = ydl.extract_info(url, download=False)
         duration = info.get("duration", 0)
@@ -37,10 +48,10 @@ def download_video(url, output_dir="downloads", clip_duration=60):
         'noplaylist': True,
         'merge_output_format': 'mp4',
         'quiet': True,
-        'cookiefile': '/home/ljj/RealyAI/ai/youtube_cookies.txt',
+        'cookiefile': settings.YOUTUBE_COOKIE_PATH,
         # 'runtime':{'js_runtimes': ['node:/usr/bin/node']},
         # 'remote_components': ['ejs:github'],
-        'extractor_args': {'youtube': {'player_client': ['web'], 'po_token': ['web.gvs+MlJgJzx9dvhahWAcdQLo6XNWrtdluuNR-MBy7H6vEGOaloAs240Hs1FxPoq6-W-vXwr2n43UHPsA8wPI2Vt8cCH1qW71w0f303UeT-DBU8qBnYjc']}},
+        'extractor_args': _youtube_extractor_args(),
     }
 
     # 3️⃣ 자르기 필요 시 범위 설정 (YT-DLP Native Clipping)
