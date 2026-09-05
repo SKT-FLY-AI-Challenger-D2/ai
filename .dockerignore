@@ -1,0 +1,13 @@
+# TASK-12: 비밀·개인·생성 파일을 빌드 컨텍스트에서 제외한다
+.env
+.git
+__pycache__
+*.pyc
+venv/
+.venv/
+downloads/
+my_db_path/
+data/
+nodes/result.txt
+youtube_cookies.txt
+youtube_cookies2.txt
