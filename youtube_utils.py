@@ -1,5 +1,7 @@
 import os
 os.environ.pop('NODE_CHANNEL_FD', None)  # ← 추가
+import shutil
+import tempfile
 import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
@@ -11,12 +13,33 @@ from config import settings
 
 
 def _youtube_extractor_args() -> dict:
-    """TASK-07: PO 토큰은 선택값이다. 없으면 공개 영상 경로만 쓰도록
-    player_client만 지정하고 po_token 옵션 자체를 넣지 않는다."""
-    args = {"player_client": ["web"]}
+    """YouTube 추출 옵션 (TASK-07, TASK-16).
+
+    - PO 토큰: 명시값(YOUTUBE_PO_TOKEN)이 있으면 그걸 쓰고, 없으면 bgutil 제공자
+      서버(BGUTIL_POT_BASE_URL)에서 자동 발급받는다. 둘 다 없으면 옵션 미지정.
+    - player_client는 강제하지 않는다(yt-dlp 기본 선택 + EJS 솔버가 처리).
+    """
+    args: dict = {}
     if settings.YOUTUBE_PO_TOKEN:
-        args["po_token"] = [settings.YOUTUBE_PO_TOKEN]
-    return {"youtube": args}
+        args["youtube"] = {"po_token": [settings.YOUTUBE_PO_TOKEN]}
+    if settings.BGUTIL_POT_BASE_URL:
+        # bgutil HTTP 제공자 전용 네임스페이스 (구 youtube:getpot_bgutil_baseurl는 deprecated)
+        args["youtubepot-bgutilhttp"] = {"base_url": [settings.BGUTIL_POT_BASE_URL]}
+    return args
+
+
+def _cookie_file() -> str | None:
+    """마운트된 쿠키 원본을 건드리지 않도록, 매 호출마다 쓰기 가능한 임시 사본을
+    만들어 그 경로를 돌려준다. yt-dlp가 세션 갱신 시 쿠키 파일을 되쓰는데,
+    실패/챌린지 응답을 반복 저장하면 원본 세션이 열화되기 때문 (TASK-16).
+    """
+    src = settings.YOUTUBE_COOKIE_PATH
+    if not src or not os.path.exists(src):
+        return None
+    fd, dst = tempfile.mkstemp(prefix="ytck_", suffix=".txt")
+    os.close(fd)
+    shutil.copyfile(src, dst)
+    return dst
 
 def download_video(url, output_dir="downloads", clip_duration=60):
     """
@@ -28,56 +51,65 @@ def download_video(url, output_dir="downloads", clip_duration=60):
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    end_time_str = time.strftime("%H:%M:%S")
-    print("[Youtube Util] 길이 추출 시작", end_time_str)
-    # 1️⃣ 먼저 길이만 가져오기 (다운로드 X)
-    with yt_dlp.YoutubeDL({
-        'quiet': True,
-        'cookiefile': settings.YOUTUBE_COOKIE_PATH,
-        # 'runtime':{'js_runtimes': ['node:/usr/bin/node']},
-        # 'remote_components': ['ejs:github'],
-        'extractor_args': _youtube_extractor_args(),
-        }) as ydl:
-        info = ydl.extract_info(url, download=False)
-        duration = info.get("duration", 0)
-    end_time_str = time.strftime("%H:%M:%S")
-    print("[Youtube Util] 영상 다운로드 시작", end_time_str)
-    ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': os.path.join(output_dir, '%(id)s.%(ext)s'),
-        'noplaylist': True,
-        'merge_output_format': 'mp4',
-        'quiet': True,
-        'cookiefile': settings.YOUTUBE_COOKIE_PATH,
-        # 'runtime':{'js_runtimes': ['node:/usr/bin/node']},
-        # 'remote_components': ['ejs:github'],
-        'extractor_args': _youtube_extractor_args(),
-    }
+    cookie_path = _cookie_file()  # 원본 보호용 임시 사본
 
-    # 3️⃣ 자르기 필요 시 범위 설정 (YT-DLP Native Clipping)
-    if duration > clip_duration:
-        half = clip_duration / 2
-        start_time = max(0, duration / 2 - half)
-        end_time = min(duration, duration / 2 + half)
-        print(f"[INFO] Clipping middle {clip_duration}s of video ({start_time}s ~ {end_time}s)...")
-        
-        ydl_opts['download_ranges'] = lambda info, ctx: [{
-            'start_time': start_time,
-            'end_time': end_time,
-            'title': 'section',
-        }]
-        ydl_opts['force_keyframes_at_cuts'] = True
-    else:
-        print(f"[INFO] Video is short ({duration}s). No clipping needed.")
+    def _common_opts() -> dict:
+        o = {
+            'quiet': True,
+            'cookiefile': cookie_path,
+            'extractor_args': _youtube_extractor_args(),
+        }
+        if settings.YOUTUBE_PROXY:
+            o['proxy'] = settings.YOUTUBE_PROXY
+        return o
 
-    # 4️⃣ 실제 다운로드
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        final_video_path = ydl.prepare_filename(info)
-    end_time_str = time.strftime("%H:%M:%S")
-    print(f"[SUCCESS] Video saved to {final_video_path} : {end_time_str}")
+    try:
+        end_time_str = time.strftime("%H:%M:%S")
+        print("[Youtube Util] 길이 추출 시작", end_time_str)
+        # 1️⃣ 먼저 길이만 가져오기 (다운로드 X)
+        with yt_dlp.YoutubeDL(_common_opts()) as ydl:
+            info = ydl.extract_info(url, download=False)
+            duration = info.get("duration", 0)
+        end_time_str = time.strftime("%H:%M:%S")
+        print("[Youtube Util] 영상 다운로드 시작", end_time_str)
+        ydl_opts = {
+            **_common_opts(),
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'outtmpl': os.path.join(output_dir, '%(id)s.%(ext)s'),
+            'noplaylist': True,
+            'merge_output_format': 'mp4',
+        }
 
-    return final_video_path
+        # 3️⃣ 자르기 필요 시 범위 설정 (YT-DLP Native Clipping)
+        if duration > clip_duration:
+            half = clip_duration / 2
+            start_time = max(0, duration / 2 - half)
+            end_time = min(duration, duration / 2 + half)
+            print(f"[INFO] Clipping middle {clip_duration}s of video ({start_time}s ~ {end_time}s)...")
+
+            ydl_opts['download_ranges'] = lambda info, ctx: [{
+                'start_time': start_time,
+                'end_time': end_time,
+                'title': 'section',
+            }]
+            ydl_opts['force_keyframes_at_cuts'] = True
+        else:
+            print(f"[INFO] Video is short ({duration}s). No clipping needed.")
+
+        # 4️⃣ 실제 다운로드
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            final_video_path = ydl.prepare_filename(info)
+        end_time_str = time.strftime("%H:%M:%S")
+        print(f"[SUCCESS] Video saved to {final_video_path} : {end_time_str}")
+
+        return final_video_path
+    finally:
+        if cookie_path and os.path.exists(cookie_path):
+            try:
+                os.remove(cookie_path)
+            except OSError:
+                pass
 
 
 def extract_audio(video_path, output_dir="downloads"):

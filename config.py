@@ -21,6 +21,16 @@ class Settings:
     # 동작하고, 로그인 전용 등 새 토큰이 필요한 대상에서만 조건부로 채운다.
     YOUTUBE_PO_TOKEN: str = os.getenv("YOUTUBE_PO_TOKEN", "")
 
+    # YouTube가 요구하는 PO 토큰(BotGuard attestation)을 자동 발급해주는 bgutil
+    # 제공자 서버 주소 (TASK-16). Compose 내부 DNS. 비우면 플러그인이 127.0.0.1:4416을 본다.
+    BGUTIL_POT_BASE_URL: str = os.getenv("BGUTIL_POT_BASE_URL", "")
+
+    # YouTube 요청을 데이터센터가 아닌 IP로 우회할 프록시 (TASK-16). 예:
+    # http://user:pass@proxy-host:port. Azure 등 클라우드 IP는 YouTube가
+    # 봇 의심으로 자주 차단하는데, 주거용 프록시를 쓰면 익명 + PO 토큰만으로도
+    # 안정적으로 받을 수 있어 개인 계정 쿠키를 쓰지 않아도 된다.
+    YOUTUBE_PROXY: str = os.getenv("YOUTUBE_PROXY", "")
+
     MODELS = []#= [os.getenv(f"YOUTUBE_API_KEY{i}") for i in range(10)]
     for i in range(10):
         key = os.getenv(f"MODEL_NAME{i}", "")
