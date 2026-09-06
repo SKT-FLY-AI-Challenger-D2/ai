@@ -24,10 +24,11 @@ jobs:
         run: python -m compileall -q . -x 'venv|\.venv'
       - name: 외부 접속 없이 import (GOOGLE_API_KEY/Chroma 없이 main import)
         run: env -u GOOGLE_API_KEY -u CHROMA_HOST python -c "import main; print('import OK')"
-      - name: 계약 스키마 점검 (schemas.py가 Backend fixture와 어긋나지 않는지)
+      - name: 계약 스키마 점검 (AnalyzeResponse가 Backend fixture와 어긋나지 않는지)
         run: |
-          python - <<'EOF'
-          from schemas import AnalyzeResponse, LegalResult, DeepfakeResult, FactResult
+          env -u GOOGLE_API_KEY -u CHROMA_HOST python - <<'EOF'
+          from main import AnalyzeResponse          # /analyze 응답 계약 (main.py에 정의)
+          from schemas import LegalResult, DeepfakeResult, FactResult
           # Backend의 tests/fixtures/ai_analysis_response.json이 기대하는 필드. 어긋나면 드리프트.
           assert set(AnalyzeResponse.model_fields) == {"is_ad", "legal", "deepfake", "fact", "final_score", "report"}, AnalyzeResponse.model_fields
           assert set(LegalResult.model_fields) == {"legal_issue_score", "legal_issue_evidence"}
