@@ -208,9 +208,12 @@ def get_transcript(url, audio_path=None):
              raise ValueError("Invalid YouTube URL")
             
         print(f"[INFO] Fetching transcript for video ID: {video_id}")
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ko', 'en'])
+        # youtube-transcript-api 1.x는 인스턴스 메서드 fetch()를 쓴다 (구 0.x의
+        # classmethod get_transcript는 제거됨). requirements.txt 버전 고정(TASK-08)
+        # 이후 이 API 불일치가 드러났다 (TASK-16).
+        fetched = YouTubeTranscriptApi().fetch(video_id, languages=['ko', 'en'])
         formatter = TextFormatter()
-        return formatter.format_transcript(transcript_list)
+        return formatter.format_transcript(fetched)
     except Exception as e:
         print(f"Error fetching transcript from YouTube: {e}")
         
