@@ -1,0 +1,89 @@
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  IMAGE: ghcr.io/skt-fly-ai-challenger-d2/ai
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 시스템 의존성 (opencv/moviepy/pytesseract)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg tesseract-ocr libgl1 libglib2.0-0
+      - name: 깨끗한 설치 (버전 고정)
+        run: pip install --no-cache-dir -r requirements.txt
+      - name: compile 전체
+        run: python -m compileall -q . -x 'venv|\.venv'
+      - name: 외부 접속 없이 import (GOOGLE_API_KEY/Chroma 없이 main import)
+        run: env -u GOOGLE_API_KEY -u CHROMA_HOST python -c "import main; print('import OK')"
+      - name: 계약 스키마 점검 (schemas.py가 Backend fixture와 어긋나지 않는지)
+        run: |
+          python - <<'EOF'
+          from schemas import AnalyzeResponse, LegalResult, DeepfakeResult, FactResult
+          # Backend의 tests/fixtures/ai_analysis_response.json이 기대하는 필드. 어긋나면 드리프트.
+          assert set(AnalyzeResponse.model_fields) == {"is_ad", "legal", "deepfake", "fact", "final_score", "report"}, AnalyzeResponse.model_fields
+          assert set(LegalResult.model_fields) == {"legal_issue_score", "legal_issue_evidence"}
+          assert set(DeepfakeResult.model_fields) == {"deepfake_ai_score", "deepfake_ai_evidence"}
+          assert set(FactResult.model_fields) == {"fake_score", "fake_evidence"}
+          print("계약 스키마 OK")
+          EOF
+
+  build-and-push:
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+
+  deploy:
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    environment: validation
+    steps:
+      - name: Azure 검증 VM에 ai만 롤링 배포
+        env:
+          SSH_KEY: ${{ secrets.AZURE_SSH_KEY }}
+          HOST: ${{ vars.AZURE_HOST }}
+          SSH_USER: ${{ vars.AZURE_USER }}
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new "$SSH_USER@$HOST" '
+            set -e
+            echo "'"$GHCR_TOKEN"'" | docker login ghcr.io -u "'"$GHCR_USER"'" --password-stdin
+            cd ~/realyai
+            docker compose pull ai
+            docker compose up -d --no-deps ai
+            docker logout ghcr.io
+            docker compose ps ai
+          '
