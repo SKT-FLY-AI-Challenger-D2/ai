@@ -82,53 +82,30 @@ def download_video(url, output_dir="downloads", clip_duration=60):
             'merge_output_format': 'mp4',
         }
 
-        # 3️⃣ 전체 다운로드 (yt-dlp가 인증·PO토큰·n-sig를 모두 처리한다)
-        #
-        # 예전에는 download_ranges + force_keyframes_at_cuts로 "가운데 60초"만
-        # 받았는데, 이 경로는 yt-dlp가 스트림 URL을 ffmpeg에 넘겨 ffmpeg가 직접
-        # googlevideo CDN에 range 요청을 한다. 데이터센터 IP에서는 그 직접 요청이
-        # 403 Forbidden으로 막혀 `ffmpeg exited with code 8`이 났다 (TASK-16).
-        # → yt-dlp로 480p 전체를 받은 뒤(작아서 부담 적음) 로컬 ffmpeg로 자른다.
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            full_video_path = ydl.prepare_filename(info)
-        # merge_output_format으로 확장자가 바뀌었을 수 있다
-        if not os.path.exists(full_video_path):
-            base = os.path.splitext(full_video_path)[0]
-            for ext in ('.mp4', '.mkv', '.webm'):
-                if os.path.exists(base + ext):
-                    full_video_path = base + ext
-                    break
-        end_time_str = time.strftime("%H:%M:%S")
-        print(f"[SUCCESS] Full video saved to {full_video_path} : {end_time_str}")
-
-        # 4️⃣ 필요하면 로컬에서 가운데 clip_duration초만 잘라낸다
-        if duration and duration > clip_duration:
+        # 3️⃣ 자르기 필요 시 범위 설정 (YT-DLP Native Clipping)
+        if duration > clip_duration:
             half = clip_duration / 2
             start_time = max(0, duration / 2 - half)
-            base = os.path.splitext(full_video_path)[0]
-            clip_path = base + '_clip.mp4'
-            print(f"[INFO] Trimming middle {clip_duration}s locally ({start_time:.1f}s ~ {start_time + clip_duration:.1f}s)...")
-            import subprocess
-            cmd = [
-                'ffmpeg', '-y', '-ss', str(start_time), '-i', full_video_path,
-                '-t', str(clip_duration),
-                '-c:v', 'libx264', '-preset', 'veryfast', '-c:a', 'aac',
-                '-movflags', '+faststart', clip_path,
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0 or not os.path.exists(clip_path):
-                print(f"[WARN] Local trim failed (rc={result.returncode}), using full video.\n{result.stderr[-500:]}")
-                return full_video_path
-            try:
-                os.remove(full_video_path)  # 원본(큰 파일) 정리
-            except OSError:
-                pass
-            print(f"[SUCCESS] Clip saved to {clip_path} : {time.strftime('%H:%M:%S')}")
-            return clip_path
+            end_time = min(duration, duration / 2 + half)
+            print(f"[INFO] Clipping middle {clip_duration}s of video ({start_time}s ~ {end_time}s)...")
 
-        print(f"[INFO] Video is short ({duration}s). No clipping needed.")
-        return full_video_path
+            ydl_opts['download_ranges'] = lambda info, ctx: [{
+                'start_time': start_time,
+                'end_time': end_time,
+                'title': 'section',
+            }]
+            ydl_opts['force_keyframes_at_cuts'] = True
+        else:
+            print(f"[INFO] Video is short ({duration}s). No clipping needed.")
+
+        # 4️⃣ 실제 다운로드
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            final_video_path = ydl.prepare_filename(info)
+        end_time_str = time.strftime("%H:%M:%S")
+        print(f"[SUCCESS] Video saved to {final_video_path} : {end_time_str}")
+
+        return final_video_path
     finally:
         if cookie_path and os.path.exists(cookie_path):
             try:
