@@ -74,7 +74,9 @@ def download_video(url, output_dir="downloads", clip_duration=60):
         print("[Youtube Util] 영상 다운로드 시작", end_time_str)
         ydl_opts = {
             **_common_opts(),
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            # 분석(얼굴 포렌식·전사)엔 480p면 충분하고, YouTube 스로틀링 하에서
+            # 1080p60은 다운로드가 10분 이상 걸린다 (TASK-16).
+            'format': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]/best',
             'outtmpl': os.path.join(output_dir, '%(id)s.%(ext)s'),
             'noplaylist': True,
             'merge_output_format': 'mp4',
