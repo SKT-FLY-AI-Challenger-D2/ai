@@ -17,7 +17,7 @@ def ad_check_node(state: ModerationState) -> dict:
         print("No transcript provided for ad check.")
         return {"is_ad": False}
 
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    api_key = settings.GOOGLE_API_KEY  # VAL-0144: config.py로 일원화
     if not api_key:
         print("Warning: GOOGLE_API_KEY not found. Defaulting to is_ad=False.")
         return {"is_ad": False}

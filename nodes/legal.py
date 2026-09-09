@@ -26,14 +26,14 @@ if root_dir not in sys.path:
 
 from schemas import ModerationState, LegalResult
 
-# 0. 환경 설정
+# 0. 환경 설정 (VAL-0144: config.py로 일원화)
 load_dotenv()
-api_key = os.getenv("GOOGLE_API_KEY")
+api_key = settings.GOOGLE_API_KEY
 
 # Docker ChromaDB 서버 설정
-CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
-CHROMA_PORT = int(os.getenv("CHROMA_PORT", 8002))  # 포트는 숫자로 변환 필요
-COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "legal_documents")
+CHROMA_HOST = settings.CHROMA_HOST
+CHROMA_PORT = settings.CHROMA_PORT
+COLLECTION_NAME = settings.CHROMA_COLLECTION_NAME
 
 # TASK-06: import 시점에 API 키·Chroma 연결을 강제하면 외부 자원이 준비되기 전에는
 # 프로세스 자체가 뜨지 못한다(sys.exit). 대신 최초 실제 사용 시점에 지연 초기화하고,

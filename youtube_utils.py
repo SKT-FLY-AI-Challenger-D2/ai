@@ -221,8 +221,8 @@ def transcribe_with_gemini(audio_path):
     Transcribes audio file using Gemini.
     """
     print(f"Transcribing audio with Gemini: {audio_path}")
-    
-    api_key = os.environ.get("GOOGLE_API_KEY")
+
+    api_key = settings.GOOGLE_API_KEY  # VAL-0144: config.py로 일원화
     if not api_key:
          print("Warning: GOOGLE_API_KEY not found. Skipping transcription.")
          return "No transcript available (Missing API Key)."

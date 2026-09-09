@@ -31,6 +31,19 @@ class Settings:
     # 안정적으로 받을 수 있어 개인 계정 쿠키를 쓰지 않아도 된다.
     YOUTUBE_PROXY: str = os.getenv("YOUTUBE_PROXY", "")
 
+    # --- LLM / 외부 API (VAL-0144: 이전엔 각 노드가 직접 os.getenv로 읽어 설정
+    #     검증·누락 진단이 분산됐다. config.py로 일원화) ---
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")      # 없으면 None
+    SERPER_API_KEY = os.getenv("SERPER_API_KEY")      # 없으면 None (fact_check 검색)
+
+    # --- ChromaDB (법률 RAG) ---
+    CHROMA_HOST: str = os.getenv("CHROMA_HOST", "localhost")
+    CHROMA_PORT: int = int(os.getenv("CHROMA_PORT", "8002"))
+    CHROMA_COLLECTION_NAME: str = os.getenv("CHROMA_COLLECTION_NAME", "legal_documents")
+
+    # --- Redis (laws_embedding.py 재임베딩 시에만, --profile reembed) ---
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
     MODELS = []#= [os.getenv(f"YOUTUBE_API_KEY{i}") for i in range(10)]
     for i in range(10):
         key = os.getenv(f"MODEL_NAME{i}", "")

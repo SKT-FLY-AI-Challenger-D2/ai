@@ -95,8 +95,8 @@ def detector_node(state: ModerationState) -> dict:
         if not face_frames:
             return {"deepfake": DeepfakeResult(deepfake_ai_score=0.0, deepfake_ai_evidence=["얼굴 감지 실패"])}
 
-        # Gemini 클라이언트 설정
-        api_key = os.environ.get("GOOGLE_API_KEY")
+        # Gemini 클라이언트 설정 (VAL-0144: config.py로 일원화)
+        api_key = settings.GOOGLE_API_KEY
         client = genai.Client(api_key=api_key)
 
         # 2. Gemini 분석 프롬프트

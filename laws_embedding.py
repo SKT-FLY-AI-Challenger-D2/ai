@@ -16,16 +16,17 @@ from langchain_community.storage import RedisStore
 from chromadb.config import Settings
 import uuid
 
+from config import settings
+
 # 환경 변수 로드
 load_dotenv()
 
 LAW_FOLDER_PATH = "./laws"
-# Docker 서버 설정 (8000번 포트)
-# 기존 하드코딩된 부분을 아래와 같이 변경
-CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
-CHROMA_PORT = int(os.getenv("CHROMA_PORT", 8002))
-COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "legal_documents")
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+# Docker 서버 설정 (VAL-0144: config.py로 일원화)
+CHROMA_HOST = settings.CHROMA_HOST
+CHROMA_PORT = settings.CHROMA_PORT
+COLLECTION_NAME = settings.CHROMA_COLLECTION_NAME
+REDIS_URL = settings.REDIS_URL
 
 
 
@@ -163,7 +164,7 @@ def process_pdf(file_path, doc_type=None):
     return docs
 
 if __name__ == "__main__":
-    api_key = os.getenv("GOOGLE_API_KEY")
+    api_key = settings.GOOGLE_API_KEY
     if not api_key:
         print("❌ GOOGLE_API_KEY 없음")
         sys.exit(1)

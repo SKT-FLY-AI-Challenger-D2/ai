@@ -3,9 +3,11 @@ from dotenv import load_dotenv
 from google import genai
 from schemas import ModerationState
 
-# Load environment variables
+from config import settings
+
+# Load environment variables (VAL-0144: config.py로 일원화)
 load_dotenv()
-api_key = os.getenv("GOOGLE_API_KEY")
+api_key = settings.GOOGLE_API_KEY
 
 def reporter_node(state: ModerationState) -> dict:
     """

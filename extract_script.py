@@ -5,9 +5,11 @@ from dotenv import load_dotenv
 from google import genai
 from urllib.parse import urlparse, parse_qs
 
-# 1. .env 파일로부터 환경 변수 로드
+from config import settings
+
+# 1. .env 파일로부터 환경 변수 로드 (VAL-0144: config.py로 일원화)
 load_dotenv()
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_API_KEY = settings.GOOGLE_API_KEY
 
 def get_video_id(url):
     """유튜브 URL에서 비디오 ID 추출"""

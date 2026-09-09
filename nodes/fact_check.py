@@ -22,10 +22,10 @@ from config import settings
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from schemas import ModerationState, FactResult
 
-# 환경 변수 로드
+# 환경 변수 로드 (VAL-0144: config.py로 일원화)
 load_dotenv()
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-SERPER_API_KEY = os.getenv("SERPER_API_KEY")
+GOOGLE_API_KEY = settings.GOOGLE_API_KEY
+SERPER_API_KEY = settings.SERPER_API_KEY
 
 # ==========================================
 # Speed knobs (추가)
