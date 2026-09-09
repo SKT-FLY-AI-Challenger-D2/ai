@@ -25,3 +25,7 @@ youtube_cookies*.txt
 # 실행 결과·생성 데이터 (TASK-02)
 nodes/result.txt
 my_db_path/
+
+# 하우스키핑 2026-09-09
+.DS_Store
+.vscode/
