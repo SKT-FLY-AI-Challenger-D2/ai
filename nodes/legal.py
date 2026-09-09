@@ -41,10 +41,11 @@ COLLECTION_NAME = settings.CHROMA_COLLECTION_NAME
 # 가능하다(재시작 없이 ChromaDB가 복구되면 다음 요청에서 다시 연결을 시도한다).
 _embeddings = None
 _vector_db = None
+_http_client = None
 
 
 def _ensure_initialized():
-    global _embeddings, _vector_db
+    global _embeddings, _vector_db, _http_client
 
     if _vector_db is not None:
         return _embeddings, _vector_db
@@ -70,13 +71,24 @@ def _ensure_initialized():
             f"ChromaDB 서버(Port: {CHROMA_PORT})에 연결할 수 없습니다: {e}"
         ) from e
 
-    _embeddings, _vector_db = embeddings, vector_db
+    _embeddings, _vector_db, _http_client = embeddings, vector_db, http_client
     return _embeddings, _vector_db
 
 
 def check_ready() -> None:
-    """/ready 엔드포인트에서 호출한다. 실패 시 예외를 던진다."""
+    """/ready 엔드포인트에서 호출한다. 실패 시 예외를 던진다.
+
+    (VAL-0142) 최초 연결이 성공해 전역에 캐시된 뒤에도, ChromaDB가 그 후
+    중단됐을 수 있다. 매 호출마다 실제 heartbeat로 재확인하고, 끊겼으면
+    죽은 캐시를 비워 다음 요청에서 재연결을 시도하게 한다.
+    """
+    global _embeddings, _vector_db, _http_client
     _ensure_initialized()
+    try:
+        _http_client.heartbeat()
+    except Exception as e:
+        _embeddings = _vector_db = _http_client = None
+        raise RuntimeError(f"ChromaDB 연결이 끊겼습니다: {e}") from e
 
 
 # 3. LLM 설정 (Gemini 2.0 Flash)

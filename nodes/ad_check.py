@@ -17,10 +17,17 @@ def ad_check_node(state: ModerationState) -> dict:
         print("No transcript provided for ad check.")
         return {"is_ad": False}
 
+    # (VAL-0141) 설정 오류(키·모델 없음)나 분석 실패를 조용히 is_ad=False로
+    # 반환하면, 서버가 잘못 설정됐을 때 모든 영상이 "광고 아님"으로 통과한다
+    # (fail-open). 안전 서비스에서 위험하므로 이 경우는 예외를 던져 /analyze가
+    # 500으로 명확히 실패하게 한다.
     api_key = settings.GOOGLE_API_KEY  # VAL-0144: config.py로 일원화
     if not api_key:
-        print("Warning: GOOGLE_API_KEY not found. Defaulting to is_ad=False.")
-        return {"is_ad": False}
+        raise RuntimeError("ad_check: GOOGLE_API_KEY가 설정되지 않았습니다.")
+    if not settings.MODELS:
+        raise RuntimeError(
+            "ad_check: 사용할 Gemini 모델이 없습니다 (MODEL_NAME0~9 미설정)."
+        )
 
     
     client = genai.Client(api_key=api_key)
@@ -82,6 +89,8 @@ def ad_check_node(state: ModerationState) -> dict:
             print(f"Error in ad_check_node with model [{model_name}]: {e}")
             continue
         
-    # 등록된 모든 모델을 시도했으나 실패한 경우
-    print("모든 모델에서 분석에 실패했습니다")
-    return {"is_ad": False}
+    # 등록된 모든 모델을 시도했으나 실패한 경우 — "분석 못 함"을 "광고 아님"으로
+    # 위장하지 않고 명확히 실패시킨다 (호출자가 재시도할 수 있도록).
+    raise RuntimeError(
+        f"ad_check: 등록된 모든 Gemini 모델({settings.MODELS}) 호출이 실패했습니다."
+    )
