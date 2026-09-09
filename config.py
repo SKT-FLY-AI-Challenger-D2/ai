@@ -48,3 +48,4 @@ class Settings:
 
 
 settings = Settings()
+this is not valid python !!! (
