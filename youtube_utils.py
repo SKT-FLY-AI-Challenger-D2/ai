@@ -5,6 +5,7 @@ import tempfile
 import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
+from youtube_transcript_api.proxies import GenericProxyConfig
 from moviepy import VideoFileClip
 from google import genai
 import time
@@ -213,7 +214,17 @@ def get_transcript(url, audio_path=None):
         # youtube-transcript-api 1.x는 인스턴스 메서드 fetch()를 쓴다 (구 0.x의
         # classmethod get_transcript는 제거됨). requirements.txt 버전 고정(TASK-08)
         # 이후 이 API 불일치가 드러났다 (TASK-16).
-        fetched = YouTubeTranscriptApi().fetch(video_id, languages=['ko', 'en'])
+        # 이 라이브러리는 yt-dlp와 별개로 자기 요청을 보내므로, 데이터센터 IP 차단을
+        # 피하려면 YOUTUBE_PROXY를 여기에도 넘겨야 한다 (TASK-16).
+        _proxy_cfg = None
+        if settings.YOUTUBE_PROXY:
+            _proxy_cfg = GenericProxyConfig(
+                http_url=settings.YOUTUBE_PROXY,
+                https_url=settings.YOUTUBE_PROXY,
+            )
+        fetched = YouTubeTranscriptApi(proxy_config=_proxy_cfg).fetch(
+            video_id, languages=['ko', 'en']
+        )
         formatter = TextFormatter()
         return formatter.format_transcript(fetched)
     except Exception as e:
