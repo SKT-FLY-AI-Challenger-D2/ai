@@ -2,6 +2,10 @@ import os
 os.environ.pop('NODE_CHANNEL_FD', None)  # ← 추가
 import shutil
 import tempfile
+import re
+import glob
+import json
+import subprocess
 import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
@@ -42,6 +46,47 @@ def _cookie_file() -> str | None:
     shutil.copyfile(src, dst)
     return dst
 
+
+# 분석에 쓸 화면(picture)과 소리(sound) 중, 특히 YouTube 480p 이하는 화면 트랙과
+# 소리 트랙이 분리 전송된다. 프록시(주거용) 환경에서 HLS(조각 수십~수백 개) 트랙은
+# 조각 하나만 실패해도 yt-dlp가 화면 트랙을 버리고 소리만 남긴 채 "성공"으로 끝낸다.
+# → DASH https 단일 URL(range 방식, 요청 몇 개) 포맷을 우선하고, 받은 뒤 실제로
+#   화면 스트림이 있는지 검증한 다음, 없으면 새 프록시 세션으로 재시도한다 (TASK-16).
+_FORMAT_PREF = (
+    'bestvideo[height<=480][vcodec^=avc1][protocol=https]+bestaudio[protocol=https]/'
+    'bestvideo[height<=480][protocol=https]+bestaudio[protocol=https]/'
+    'best[height<=480][protocol=https]/'
+    'bestvideo[height<=480]+bestaudio/best[height<=480]/best'
+)
+_DOWNLOAD_MAX_ATTEMPTS = 3
+
+
+def _probe_streams(path: str) -> tuple[bool, float]:
+    """ffprobe로 (화면 스트림 존재 여부, 길이초)를 돌려준다. 실패 시 (False, 0.0)."""
+    if not path or not os.path.exists(path):
+        return False, 0.0
+    try:
+        out = subprocess.run(
+            ['ffprobe', '-v', 'error', '-show_entries',
+             'stream=codec_type:format=duration', '-of', 'json', path],
+            capture_output=True, text=True, timeout=30,
+        )
+        data = json.loads(out.stdout or '{}')
+        has_video = any(s.get('codec_type') == 'video' for s in data.get('streams', []))
+        dur = float((data.get('format') or {}).get('duration') or 0.0)
+        return has_video, dur
+    except Exception:
+        return False, 0.0
+
+
+def _proxy_for_attempt(attempt: int) -> str | None:
+    """설정된 프록시의 sticky 세션 ID를 시도마다 바꿔 새 출구 IP를 받는다.
+    (sessid가 없는 프록시 URL이면 그대로 반환)"""
+    p = settings.YOUTUBE_PROXY
+    if not p:
+        return None
+    return re.sub(r'(sessid\.)[^:;@/]+', rf'\g<1>realyai{attempt}', p)
+
 def download_video(url, output_dir="downloads", clip_duration=60):
     """
     If video duration >= clip_duration:
@@ -54,59 +99,90 @@ def download_video(url, output_dir="downloads", clip_duration=60):
         os.makedirs(output_dir)
     cookie_path = _cookie_file()  # 원본 보호용 임시 사본
 
-    def _common_opts() -> dict:
+    def _common_opts(attempt: int = 1) -> dict:
         o = {
             'quiet': True,
             'cookiefile': cookie_path,
             'extractor_args': _youtube_extractor_args(),
         }
-        if settings.YOUTUBE_PROXY:
-            o['proxy'] = settings.YOUTUBE_PROXY
+        proxy = _proxy_for_attempt(attempt)
+        if proxy:
+            o['proxy'] = proxy
         return o
 
     try:
-        end_time_str = time.strftime("%H:%M:%S")
-        print("[Youtube Util] 길이 추출 시작", end_time_str)
+        print("[Youtube Util] 길이 추출 시작", time.strftime("%H:%M:%S"))
         # 1️⃣ 먼저 길이만 가져오기 (다운로드 X)
         with yt_dlp.YoutubeDL(_common_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
             duration = info.get("duration", 0)
-        end_time_str = time.strftime("%H:%M:%S")
-        print("[Youtube Util] 영상 다운로드 시작", end_time_str)
-        ydl_opts = {
-            **_common_opts(),
-            # 분석(얼굴 포렌식·전사)엔 480p면 충분하고, YouTube 스로틀링 하에서
-            # 1080p60은 다운로드가 10분 이상 걸린다 (TASK-16).
-            'format': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]/best',
-            'outtmpl': os.path.join(output_dir, '%(id)s.%(ext)s'),
-            'noplaylist': True,
-            'merge_output_format': 'mp4',
-        }
+            video_id = info.get("id") or "video"
 
-        # 3️⃣ 자르기 필요 시 범위 설정 (YT-DLP Native Clipping)
-        if duration > clip_duration:
+        need_clip = bool(duration) and duration > clip_duration
+        if need_clip:
             half = clip_duration / 2
             start_time = max(0, duration / 2 - half)
             end_time = min(duration, duration / 2 + half)
+            min_expected = clip_duration * 0.7  # 재인코딩 오차 감안
             print(f"[INFO] Clipping middle {clip_duration}s of video ({start_time}s ~ {end_time}s)...")
-
-            ydl_opts['download_ranges'] = lambda info, ctx: [{
-                'start_time': start_time,
-                'end_time': end_time,
-                'title': 'section',
-            }]
-            ydl_opts['force_keyframes_at_cuts'] = True
         else:
+            start_time = end_time = None
+            min_expected = max(1.0, (duration or 1) * 0.5)
             print(f"[INFO] Video is short ({duration}s). No clipping needed.")
 
-        # 4️⃣ 실제 다운로드
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            final_video_path = ydl.prepare_filename(info)
-        end_time_str = time.strftime("%H:%M:%S")
-        print(f"[SUCCESS] Video saved to {final_video_path} : {end_time_str}")
+        base = os.path.join(output_dir, video_id)
 
-        return final_video_path
+        # 2️⃣ 검증 + 재시도: DASH https 우선, 받은 파일에 화면 스트림이 있고
+        #    길이가 기대치 이상이어야 성공으로 인정. 아니면 새 프록시 세션으로 재시도.
+        last_reason = "알 수 없음"
+        for attempt in range(1, _DOWNLOAD_MAX_ATTEMPTS + 1):
+            for stale in glob.glob(base + ".*"):
+                try:
+                    os.remove(stale)
+                except OSError:
+                    pass
+
+            ydl_opts = {
+                **_common_opts(attempt),
+                'format': _FORMAT_PREF,
+                'outtmpl': os.path.join(output_dir, '%(id)s.%(ext)s'),
+                'noplaylist': True,
+                'merge_output_format': 'mp4',
+            }
+            if need_clip:
+                ydl_opts['download_ranges'] = lambda info, ctx: [{
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'title': 'section',
+                }]
+                ydl_opts['force_keyframes_at_cuts'] = True
+
+            print(f"[Youtube Util] 다운로드 시도 {attempt}/{_DOWNLOAD_MAX_ATTEMPTS} : {time.strftime('%H:%M:%S')}")
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    dl_info = ydl.extract_info(url, download=True)
+                    final_video_path = ydl.prepare_filename(dl_info)
+                if not os.path.exists(final_video_path):
+                    root = os.path.splitext(final_video_path)[0]
+                    for ext in ('.mp4', '.mkv', '.webm'):
+                        if os.path.exists(root + ext):
+                            final_video_path = root + ext
+                            break
+
+                has_video, dur = _probe_streams(final_video_path)
+                if has_video and dur >= min_expected:
+                    print(f"[SUCCESS] Video saved to {final_video_path} "
+                          f"(attempt {attempt}, {dur:.1f}s) : {time.strftime('%H:%M:%S')}")
+                    return final_video_path
+                last_reason = f"불완전 (화면스트림={has_video}, 길이={dur:.1f}s < {min_expected:.1f}s)"
+                print(f"[WARN] 시도 {attempt} 결과 {last_reason} — 재시도")
+            except Exception as e:
+                last_reason = str(e)
+                print(f"[WARN] 시도 {attempt} 실패: {last_reason} — 재시도")
+
+        raise RuntimeError(
+            f"영상 다운로드가 {_DOWNLOAD_MAX_ATTEMPTS}회 모두 실패했습니다 (마지막 사유: {last_reason})"
+        )
     finally:
         if cookie_path and os.path.exists(cookie_path):
             try:

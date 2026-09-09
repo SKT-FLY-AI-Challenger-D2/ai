@@ -113,10 +113,14 @@ async def analyze_video(request: AnalyzeRequest):
         # print("Extracting random frames...")
         # frame_paths = extract_random_frames(video_path, num_frames=4)
         
+        # ModerationState의 input_text/video_path/audio_path는 str 필드다.
+        # 전사 실패(None)나 오디오 추출 실패(None)로 그래프가 검증 에러로 죽지 않도록
+        # 빈 문자열로 보정한다. 자막이 없으면 ad_check가 is_ad=False로 처리하고,
+        # 오디오가 없으면 voice 관련 분기만 건너뛴다 (TASK-16).
         inputs = {
-            "input_text": input_text,
-            "video_path": video_path,
-            "audio_path": audio_path,
+            "input_text": input_text or "",
+            "video_path": video_path or "",
+            "audio_path": audio_path or "",
             # "frame_paths": frame_paths
         }
         
