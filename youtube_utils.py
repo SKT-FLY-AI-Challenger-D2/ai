@@ -52,11 +52,18 @@ def _cookie_file() -> str | None:
 # 조각 하나만 실패해도 yt-dlp가 화면 트랙을 버리고 소리만 남긴 채 "성공"으로 끝낸다.
 # → DASH https 단일 URL(range 방식, 요청 몇 개) 포맷을 우선하고, 받은 뒤 실제로
 #   화면 스트림이 있는지 검증한 다음, 없으면 새 프록시 세션으로 재시도한다 (TASK-16).
+#
+# 해상도 상한 480->360 (개발 로그 작업 126): 다운로드 구간이 프록시 대역폭
+# (실측 85~165KB/s, 직접 연결 대비 27배 느림 — 프록시 자체가 병목이며 직접 연결은
+# YouTube 봇 감지로 100% 차단되어 대체 불가)에 막혀 파일 크기에 거의 비례해서
+# 시간이 걸린다. 480p 60초 클립(~5MB, 68초) -> 360p(~3.4MB, 46초)로 약 33% 단축.
+# Detector 노드의 얼굴 크롭 품질을 실제 이미지로 육안 검증했고(같은 영상 기준)
+# 저하 없음을 확인했다.
 _FORMAT_PREF = (
-    'bestvideo[height<=480][vcodec^=avc1][protocol=https]+bestaudio[protocol=https]/'
-    'bestvideo[height<=480][protocol=https]+bestaudio[protocol=https]/'
-    'best[height<=480][protocol=https]/'
-    'bestvideo[height<=480]+bestaudio/best[height<=480]/best'
+    'bestvideo[height<=360][vcodec^=avc1][protocol=https]+bestaudio[protocol=https]/'
+    'bestvideo[height<=360][protocol=https]+bestaudio[protocol=https]/'
+    'best[height<=360][protocol=https]/'
+    'bestvideo[height<=360]+bestaudio/best[height<=360]/best'
 )
 _DOWNLOAD_MAX_ATTEMPTS = 3
 
