@@ -231,24 +231,32 @@ def classify_domain(script: str) -> str:
     prompt = f"""
     다음 스크립트가 어느 분야의 광고인지 아래 중 하나로만 답하세요.
     [식품, 화장품, 의료, 금융, 공통]
-    
+
     스크립트: {script[:500]}
-    
+
     분야:"""
     for model_name in settings.MODELS:
         try:
             llm = ChatGoogleGenerativeAI(
                 model=model_name,
-                temperature=0, 
+                temperature=0,
                 google_api_key=api_key
             )
-            result = llm.invoke(prompt).content.strip()
+            # 성능 조사(개발 로그 작업 126) 중 발견된 버그 수정:
+            # .content 는 모델 응답 형식에 따라 str이 아니라 list(멀티파트 응답)로 올 때가
+            # 있고, 그 경우 .strip() 호출이 AttributeError를 던진다. 이 함수는 원래
+            # APIError만 잡았기 때문에 이 예외가 그대로 legal_node()까지 전파되어
+            # domain 변수가 할당되지 못한 채로 남고, 이후 최종 리포트 생성 루프가
+            # 매 모델마다 UnboundLocalError로 실패해 legal 분석 결과 전체가 유실됐다
+            # (재현 확인: state.legal이 None인 채로 반환됨). str()로 방어하고 예외
+            # 범위를 넓혀 한 모델의 응답 문제로 전체 분류가 죽지 않게 한다.
+            result = str(llm.invoke(prompt).content).strip()
             for domain in ["식품", "화장품", "의료", "금융"]:
                 if domain in result:
                     return domain
-        except APIError as e:
-                print(f"{model_name} API 에러(트래픽 등): {e}. 다음 모델 시도.")
-                continue
+        except Exception as e:
+            print(f"{model_name} 분야 분류 실패({type(e).__name__}: {e}). 다음 모델 시도.")
+            continue
     return "공통"
 
 
@@ -269,6 +277,12 @@ def legal_node(state: ModerationState) -> ModerationState:
         return state
 
     print(f"🔍 법률 데이터베이스 검색 및 매칭 중...")
+    # classify_domain()이나 그 아래 ChromaDB 조회에서 무엇이 실패하더라도 domain은
+    # 항상 값을 갖도록 try 진입 전에 기본값을 잡아둔다(개발 로그 작업 126 참고).
+    # 이 초기화가 없으면 classify_domain() 실패 시 domain이 미할당 상태로 남아
+    # 아래 리포트 생성 루프에서 UnboundLocalError가 나고 legal 분석 결과 전체가
+    # 유실된다 — 실제로 재현된 버그다.
+    domain = "공통"
     try:
 
         domain = classify_domain(script)
