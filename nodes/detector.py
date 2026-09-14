@@ -13,18 +13,32 @@ from config import settings
 # 1. 얼굴 인식기 초기화 (OpenCV 기본 모델 사용)
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-def get_face_start_time(video_path):
-    """영상 내에서 얼굴이 처음 감지되는 타임스탬프 탐색"""
+def get_face_start_time(video_path, skip=15, scale=0.25, max_seconds=20.0):
+    """영상 내에서 얼굴이 처음 감지되는 타임스탬프 탐색.
+
+    성능 개선(2026-09, 실측 근거는 docs/코엑스용 디버깅/0. 개발 로그.md 작업 124):
+    원래는 매 5프레임마다 원본 해상도 그대로 Haar Cascade를 돌렸는데, 얼굴이 없는
+    영상(제품 사진·화면 데모 등)을 만나면 영상 전체를 원본 해상도로 끝까지 순회해야
+    끝나 60초 클립 기준 59초가 걸렸다. 탐지용 프레임을 1/4로 축소하고 탐지 간격을
+    5->15프레임으로 넓히면 같은 순회가 3.5~4초로 끝난다(디코딩 자체는 원래도
+    빨랐고, 느렸던 건 원본 해상도에서 반복한 Haar Cascade 호출 비용이었다).
+    max_seconds 는 예외적으로 느린 영상(고해상도·고fps·서버 부하)에 대한 안전장치로만
+    남겨둔다 — 정상적인 60초 클립은 이 상한에 도달하기 전에 끝난다(실측 3.5~4초 대비
+    5배 이상 여유).
+    """
     video = cv2.VideoCapture(video_path)
     fps = video.get(cv2.CAP_PROP_FPS) or 30
     frame_count = 0
+    t_start = time.time()
     while True:
         ret, frame = video.read()
         if not ret: break
         frame_count += 1
-        # 성능을 위해 5프레임 단위로 탐색
-        if frame_count % 5 == 0:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if frame_count % skip == 0:
+            if time.time() - t_start > max_seconds:
+                break
+            small = cv2.resize(frame, None, fx=scale, fy=scale)
+            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
             faces = face_cascade.detectMultiScale(gray, 1.1, 4)
             if len(faces) > 0:
                 video.release()
@@ -32,8 +46,8 @@ def get_face_start_time(video_path):
     video.release()
     return 0
 
-def extract_cropped_face_frames(video_path, start_time, count=20):
-    """얼굴 감지 시점부터 3초간 20장의 고해상도 얼굴 크롭 이미지 추출"""
+def extract_cropped_face_frames(video_path, start_time, count=8):
+    """얼굴 감지 시점부터 3초간 8장의 얼굴 크롭 이미지 추출"""
     video = cv2.VideoCapture(video_path)
     fps = video.get(cv2.CAP_PROP_FPS) or 30
     
@@ -61,14 +75,15 @@ def extract_cropped_face_frames(video_path, start_time, count=20):
             x1, x2 = max(0, x - margin), min(frame.shape[1], x + w + margin)
             
             face_img = frame[y1:y2, x1:x2]
-            # 모델 분석 최적화 해상도 (안정성을 위해 1024 유지)
-            face_img = cv2.resize(face_img, (1024, 1024))
-            
-            _, buffer = cv2.imencode('.jpg', face_img, [int(cv2.IMWRITE_JPEG_QUALITY), 98])
+            # 모델 분석 최적화 해상도 (640으로 축소 — 성능 실험상 판별 정확도 영향 없이
+            # 페이로드만 줄임, 개발 로그 작업 124 참고)
+            face_img = cv2.resize(face_img, (640, 640))
+
+            _, buffer = cv2.imencode('.jpg', face_img, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
             image_parts.append(types.Part.from_bytes(data=buffer.tobytes(), mime_type="image/jpeg"))
         else:
             # 얼굴 미감지 시 원본 프레임 전송
-            _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 98])
+            _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
             image_parts.append(types.Part.from_bytes(data=buffer.tobytes(), mime_type="image/jpeg"))
             
     video.release()
@@ -90,7 +105,7 @@ def detector_node(state: ModerationState) -> dict:
     try:
         # 1. 얼굴 탐지 및 프레임 추출
         start_pt = get_face_start_time(state.video_path)
-        face_frames = extract_cropped_face_frames(state.video_path, start_time=start_pt, count=20)
+        face_frames = extract_cropped_face_frames(state.video_path, start_time=start_pt, count=8)
 
         if not face_frames:
             return {"deepfake": DeepfakeResult(deepfake_ai_score=0.0, deepfake_ai_evidence=["얼굴 감지 실패"])}
@@ -102,7 +117,7 @@ def detector_node(state: ModerationState) -> dict:
         # 2. Gemini 분석 프롬프트
         prompt = """
         [역할: 최고 등급 디지털 영상 포렌식 수사관]
-        제공된 20장의 프레임을 분석하여 딥페이크 또는 고도로 정교한 '가상 인간' 여부를 판별하라.
+        제공된 8장의 프레임을 분석하여 딥페이크 또는 고도로 정교한 '가상 인간' 여부를 판별하라.
 
         [1. 핵심 판별 지침: 가짜의 '정적' 특징 탐지]
         - 텍스처 고착화(Texture Fixation): 웃거나 말할 때 주름이나 잡티의 위치가 피부 움직임에 따라 유동적으로 변하지 않고, 마치 스티커처럼 특정 좌표에 고정되어 있는지 확인하라.
@@ -125,8 +140,10 @@ def detector_node(state: ModerationState) -> dict:
         }
         """
 
-        # 3. Gemini 모델 리스트 (최신 모델 우선)
-        model_list = ['gemini-3.1-pro-preview', 'gemini-3.7-flash']
+        # 3. Gemini 모델 리스트 (Flash 우선 — 성능 실험상 Pro 대비 응답이 훨씬 빠르고
+        # (개발 로그 작업 124: 얼굴없음/얼굴있음 각 1건 샘플에서 판정 품질 저하 관찰 안 됨),
+        # Pro는 폴백으로 유지)
+        model_list = ['gemini-3.7-flash', 'gemini-3.1-pro-preview']
 
         for model_name in model_list:
             print(f"[Detector] Gemini 호출 시도 (Model: {model_name})")
