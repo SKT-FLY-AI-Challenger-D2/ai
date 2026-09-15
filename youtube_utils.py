@@ -94,13 +94,21 @@ def _proxy_for_attempt(attempt: int) -> str | None:
         return None
     return re.sub(r'(sessid\.)[^:;@/]+', rf'\g<1>realyai{attempt}', p)
 
-def download_video(url, output_dir="downloads", clip_duration=60):
+def download_video(url, output_dir="downloads", clip_duration=40):
     """
     If video duration >= clip_duration:
         download middle clip_duration seconds
     Else:
         download full original video
     Returns path to downloaded video
+
+    clip_duration 60->40 (개발 로그 참고): 다운로드는 프록시 대역폭에 막혀 파일
+    크기에 거의 비례해서 시간이 걸리므로, 자르는 길이를 줄이면 그만큼 빨라진다
+    (실측 60s: 33.71초/2573KB -> 40s: 24.65초/1805.5KB, 약 27% 단축). 30초까지
+    줄이면 더 빠르지만(약 43% 단축) 실측상 Detector가 얼굴 있는 구간을 완전히
+    놓치는 경우가 확인돼 보류했다 — 40초는 같은 케이스에서 얼굴 탐지가 원본과
+    거의 같은 지점에서 그대로 성공함을 확인. 다만 영상 하나로만 검증했으므로
+    일반적으로 항상 안전하다는 보장은 아니다.
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
